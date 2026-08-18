@@ -48,7 +48,12 @@ class ShellBagsAnalyzer(AnalyzerBase):
         Collect NTUSER.DAT and UsrClass.dat from user profile directories.
         """
         artifacts: list[RawArtifact] = []
-        root = Path(device.mount_point) if device.mount_point else Path.cwd()
+        if device.mount_point:
+            root = Path(device.mount_point)
+        elif os.name == "nt":
+            root = Path(os.environ.get("SystemDrive", "C:") + "\\")
+        else:
+            root = Path("/")
         user_profiles_dir = root / "Users"
         
         if not user_profiles_dir.exists() or not user_profiles_dir.is_dir():

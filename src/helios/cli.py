@@ -141,6 +141,11 @@ def investigate_cmd(
     date_to = datetime.strptime(to_date, "%Y-%m-%d") if to_date else None
 
     drive_list = drives.split(",") if drives else None
+    if drive_list:
+        drive_list = [d.strip().upper().rstrip(":\\") + ":" for d in drive_list if d.strip()]
+        if not drive_list:
+            click.echo("Error: no valid drive letters after normalization.", err=True)
+            raise SystemExit(1)
     path_list = path.split(",") if path else []
     extra_paths = path_list or None
 
@@ -195,7 +200,7 @@ def investigate_cmd(
     print_investigation_summary(investigation)
 
     if result.get("walk_capped"):
-        print_status("Warning: file walk hit the 2,000 files/drive cap -- results may be partial.", "warning")
+        print_status("Warning: file walk hit the per-drive cap -- results may be partial.", "warning")
     print_status(f"HTML report: {result['report_path']}", "success")
 
 

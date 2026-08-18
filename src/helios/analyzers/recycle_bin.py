@@ -191,9 +191,12 @@ class RecycleBinAnalyzer(AnalyzerBase):
             with tempfile.TemporaryDirectory() as tmp_dir:
                 csv_dir = Path(tmp_dir)
                 for rb_root in rb_roots:
+                    # Derive device from the recycle bin's drive root
+                    rb_drive = str(rb_root).split(os.sep)[0] if os.name == "nt" else str(rb_root)
+                    rb_device_id = rb_drive if rb_drive else (artifacts[0].device_id if artifacts else "")
                     rows = self.ez_tools.run_rbcmd(rb_root, csv_dir)
                     for row in rows:
-                        event = self._rbcmd_row_to_event(row, artifacts[0].device_id)
+                        event = self._rbcmd_row_to_event(row, rb_device_id)
                         if event is None:
                             continue
                         if str(event.source_path).lower() in seen_names:

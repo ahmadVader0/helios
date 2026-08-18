@@ -188,8 +188,6 @@ def _mft_module(
         mft_path = Path(drv.drive_letter) / "$MFT"
         if os.name == "nt":
             mft_path = Path(f"{drv.drive_letter}\\$MFT")
-        if not mft_path.exists():
-            continue
 
         src_dev = drive_devices.get(drv.drive_letter)
         device_id = src_dev.device_id if src_dev else ""
@@ -299,14 +297,7 @@ def _sleuthkit_module(scan_options, target_drives, local_device, file_records: l
                 raw = sk.run_fls(fls_source, recursive=True, deleted_only=True)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("fls failed on %s: %s", fls_source, exc)
-                if fls_source.startswith("\\\\.\\"):
-                    fallback_src = drv.drive_letter.rstrip("\\")
-                    try:
-                        raw = sk.run_fls(fallback_src, recursive=True, deleted_only=True)
-                    except Exception:  # noqa: BLE001
-                        continue
-                else:
-                    continue
+                continue
 
         all_lines = raw.splitlines()
         # Filter out Windows OS noise — but NOT $OrphanFiles which contain

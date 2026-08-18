@@ -50,9 +50,6 @@ class MFTAnalyzer(AnalyzerBase):
             return []
 
         mft_path: Path = Path(device.drive_letter) / "$MFT"
-        if not mft_path.exists():
-            logger.warning(f"$MFT not found at {mft_path}")
-            return []
 
         output_dir: Path = Path(self.config.get("output_dir", "/tmp/helios/mft"))
         try:
@@ -107,30 +104,32 @@ class MFTAnalyzer(AnalyzerBase):
                         modified_si: datetime | None = parse_mftecmd_timestamp(modified_si_str)
                         modified_fn: datetime | None = parse_mftecmd_timestamp(modified_fn_str)
 
-                        ts = created_si or created_fn or modified_si or modified_fn
-                        if ts is None:
-                            # Never fabricate datetime.now() for files without timestamps
-                            continue
-                        timestamp: datetime = ts if ts.tzinfo is not None else ts.replace(tzinfo=timezone.utc)
-
-                        event_type = EventType.FILE_CREATE if in_use else EventType.FILE_DELETE
-
                         device_id = artifact.device_id or self.name()
 
-                        event = DataEvent(
-                            timestamp=timestamp,
-                            event_type=event_type,
-                            source_device=device_id,
-                            source_path=full_path,
-                            raw_source="MFTECmd $MFT",
-                            confidence=Confidence.HIGH,
-                            metadata={
-                                "description": f"File {'created/exists' if in_use else 'deleted'}: {full_path}",
-                                "in_use": in_use,
-                                "has_ads": has_ads,
-                            },
-                        )
-                        results.append(event)
+                        if in_use:
+                            # Skip event emission for in-use files (covered by live walk)
+                            # But still check timestomping and ADS below
+                            pass
+                        else:
+                            # Deleted file — use modified_si as best approximation
+                            del_ts = modified_si or modified_fn or created_si or created_fn
+                            if del_ts is None:
+                                continue
+                            timestamp: datetime = del_ts if del_ts.tzinfo is not None else del_ts.replace(tzinfo=timezone.utc)
+                            event = DataEvent(
+                                timestamp=timestamp,
+                                event_type=EventType.FILE_DELETE,
+                                source_device=device_id,
+                                source_path=full_path,
+                                raw_source="MFTECmd $MFT",
+                                confidence=Confidence.MEDIUM,
+                                metadata={
+                                    "description": f"MFT record inactive (deletion time unknown): {full_path}",
+                                    "in_use": False,
+                                    "has_ads": has_ads,
+                                },
+                            )
+                            results.append(event)
 
                         is_timestomped = detect_timestomping(created_si, modified_si, created_fn, modified_fn)
                         if is_timestomped:

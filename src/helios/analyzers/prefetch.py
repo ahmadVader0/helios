@@ -1,4 +1,5 @@
 import logging
+import os
 import struct
 import tempfile
 import uuid
@@ -59,7 +60,12 @@ class PrefetchAnalyzer(AnalyzerBase):
             A list of RawArtifact objects representing Prefetch files.
         """
         artifacts = []
-        root = Path(device.mount_point) if device.mount_point else Path.cwd()
+        if device.mount_point:
+            root = Path(device.mount_point)
+        elif os.name == "nt":
+            root = Path(os.environ.get("SystemDrive", "C:") + "\\")
+        else:
+            root = Path("/")
         prefetch_dir = root / "Windows" / "Prefetch"
         
         if prefetch_dir.exists() and prefetch_dir.is_dir():

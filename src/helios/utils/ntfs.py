@@ -167,7 +167,9 @@ def detect_timestomping(
         return False
     # SI creation earlier than FN creation by a wide margin → suspicious
     if (fn_created - si_created).total_seconds() > 60:
-        return True
+        # Only flag if SI modification is also suspicious
+        if si_modified and si_modified < si_created:
+            return True
     # SI creation LATER than SI modification → impossible without tampering
     if si_modified and si_created and si_modified < si_created:
         return True

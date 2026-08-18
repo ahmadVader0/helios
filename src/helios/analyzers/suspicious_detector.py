@@ -428,12 +428,15 @@ class SuspiciousDetectorAnalyzer(AnalyzerBase):
             if deletions:
                 best_start = _to_utc(deletions[0].timestamp)
                 best_count = 0
-                for i, start_evt in enumerate(deletions):
-                    start_ts = _to_utc(start_evt.timestamp)
-                    count = sum(1 for e in deletions[i:] if _to_utc(e.timestamp) - start_ts <= window)
+                left = 0
+                for right in range(len(deletions)):
+                    right_ts = _to_utc(deletions[right].timestamp)
+                    while _to_utc(deletions[left].timestamp) + window < right_ts:
+                        left += 1
+                    count = right - left + 1
                     if count > best_count:
                         best_count = count
-                        best_start = start_ts
+                        best_start = _to_utc(deletions[left].timestamp)
                 if best_count >= threshold:
                     burst_paths = [
                         str(e.source_path) for e in deletions
@@ -473,7 +476,8 @@ class SuspiciousDetectorAnalyzer(AnalyzerBase):
                 ts = getattr(evt, "timestamp", None)
                 if ts is None:
                     continue
-                outside = (ts.hour, ts.minute) < (start_h, start_m) or (ts.hour, ts.minute) >= (end_h, end_m)
+                local_ts = ts.astimezone() if ts.tzinfo else ts
+                outside = (local_ts.hour, local_ts.minute) < (start_h, start_m) or (local_ts.hour, local_ts.minute) >= (end_h, end_m)
                 if outside:
                     alerts.append(Alert(
                         severity=Severity.MEDIUM,

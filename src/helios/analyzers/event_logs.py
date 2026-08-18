@@ -3,6 +3,7 @@ Windows EVTX Event Logs Analyzer.
 """
 
 import logging
+import os
 import tempfile
 import uuid
 from datetime import datetime, timezone
@@ -60,7 +61,12 @@ class EventLogsAnalyzer(AnalyzerBase):
         from the given device root path.
         """
         artifacts: list[RawArtifact] = []
-        root = Path(device.mount_point) if device.mount_point else Path.cwd()
+        if device.mount_point:
+            root = Path(device.mount_point)
+        elif os.name == "nt":
+            root = Path(os.environ.get("SystemDrive", "C:") + "\\")
+        else:
+            root = Path("/")
         winevt_dir = root / "Windows" / "System32" / "Winevt" / "Logs"
 
         target_logs = [

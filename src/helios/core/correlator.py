@@ -208,8 +208,6 @@ class CrossDeviceCorrelator:
                         getattr(d.device_type, "value", str(d.device_type)) in ("USB", "ANDROID")
                         for d, _ in records
                         if d.device_id != source_device_id
-                    ) or any(
-                        drv in ("D:", "E:", "F:", "G:", "H:") for drv in target_device_ids
                     )
                     
                     chain = MovementChain(
@@ -292,14 +290,14 @@ class CrossDeviceCorrelator:
         for d_event in self.investigation.events:
             if getattr(d_event, "event_type", None) != getattr(EventType, "USB_DISCONNECT", "USB_DISCONNECT"):
                 continue
-            dev = getattr(d_event, "device_id", None) or "unknown_usb"
+            dev = getattr(d_event, "source_device", None) or "unknown_usb"
             ts = getattr(d_event, "timestamp", None)
             if ts is not None:
                 disconnects_by_device.setdefault(dev, []).append(ts)
 
         for event in self.investigation.events:
             if getattr(event, "event_type", None) == getattr(EventType, "USB_CONNECT", "USB_CONNECT"):
-                dev = getattr(event, "device_id", None) or "unknown_usb"
+                dev = getattr(event, "source_device", None) or "unknown_usb"
                 connect_time = getattr(event, "timestamp", None)
                 if connect_time is None:
                     continue

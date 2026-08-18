@@ -15,6 +15,7 @@ TOOLS_IN_USE: tuple[str, ...] = (
     "PECmd",                  # Prefetch execution history
     "RBCmd",                  # Recycle Bin $I parsing
     "SBECmd",                 # ShellBags folder history
+    "MFTECmd",                # MFT & USN Journal parse
     "chainsaw",               # Sigma rule hunts over Windows event logs
     "exiftool",               # deep file-type verification
     "adb",                    # Android device detection
@@ -28,6 +29,7 @@ TOOL_LABELS: dict[str, str] = {
     "PECmd": "PECmd (Prefetch parse)",
     "RBCmd": "RBCmd (Recycle Bin parse)",
     "SBECmd": "SBECmd (ShellBags parse)",
+    "MFTECmd": "MFTECmd (MFT & USN Journal parse)",
     "chainsaw": "Chainsaw (Sigma EVTX hunts)",
     "exiftool": "ExifTool (file-type verification)",
     "adb": "ADB (Android device detection)",

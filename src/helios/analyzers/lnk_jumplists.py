@@ -183,7 +183,7 @@ class LnkJumpListAnalyzer(AnalyzerBase):
                 
             event = DataEvent(
                 timestamp=timestamp,
-                event_type=EventType.APP_EXECUTE,
+                event_type=EventType.FILE_ACCESS,
                 source_device=source_device,
                 source_path=target or source_path,
                 raw_source="LECmd",
@@ -224,7 +224,7 @@ class LnkJumpListAnalyzer(AnalyzerBase):
                 
             event = DataEvent(
                 timestamp=access_time,
-                event_type=EventType.APP_EXECUTE,
+                event_type=EventType.FILE_ACCESS,
                 source_device=source_device,
                 source_path=source_path,
                 raw_source="JLECmd",
