@@ -110,12 +110,12 @@ class ChainsawAdapter(ForensicToolAdapter):
         # detections), so the output file is always (re)written first.
         output_json.parent.mkdir(parents=True, exist_ok=True)
         with open(output_json, "w", encoding="utf-8") as f:
-            f.write(result.stdout)
+            f.write(result.stdout or "")
 
         if result.returncode != 0:
             logger.warning(
                 "Chainsaw hunt failed (rc=%d) for %s: %s",
-                result.returncode, evtx_dir, result.stderr[:500],
+                result.returncode, evtx_dir, (result.stderr or "")[:500],
             )
             return []
 

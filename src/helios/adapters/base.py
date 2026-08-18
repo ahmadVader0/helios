@@ -377,18 +377,20 @@ class ForensicToolAdapter(ABC):
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=timeout,
                 check=False,
                 shell=False,  # Explicitly disallow shell execution
                 env=env,
             )
-            stdout = result.stdout
-            stderr = result.stderr
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
             returncode = result.returncode
         except subprocess.TimeoutExpired as e:
             logger.error(f"Command timed out after {timeout} seconds: {cmd}")
-            stdout = e.stdout.decode('utf-8') if isinstance(e.stdout, bytes) else (e.stdout or "")
-            stderr = e.stderr.decode('utf-8') if isinstance(e.stderr, bytes) else (e.stderr or "")
+            stdout = e.stdout.decode('utf-8', errors='replace') if isinstance(e.stdout, bytes) else (e.stdout or "")
+            stderr = e.stderr.decode('utf-8', errors='replace') if isinstance(e.stderr, bytes) else (e.stderr or "")
             returncode = -1  # Indicate failure
         except subprocess.SubprocessError as e:
             logger.error(f"Subprocess error executing command {cmd}: {e}")

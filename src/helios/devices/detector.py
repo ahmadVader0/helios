@@ -71,7 +71,7 @@ def detect_drives() -> list[DriveInfo]:
             result = subprocess.run(
                 ["lsblk", "--json", "--output",
                  "NAME,FSTYPE,SIZE,MOUNTPOINT,RM,TYPE,LABEL,SERIAL"],
-                capture_output=True, text=True, check=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
             )
             data = json.loads(result.stdout)
 
@@ -171,7 +171,7 @@ def detect_drives() -> list[DriveInfo]:
         if not drives:
             try:
                 ps_cmd = "Get-Volume | Select-Object DriveLetter,FileSystemLabel,FileSystem,SizeRemaining,Size,DriveType | ConvertTo-Json"
-                res = subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, text=True, check=True)
+                res = subprocess.run(["powershell", "-Command", ps_cmd], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
                 vols = json.loads(res.stdout)
                 if isinstance(vols, dict):
                     vols = [vols]
@@ -199,7 +199,7 @@ def detect_drives() -> list[DriveInfo]:
                     ["wmic", "logicaldisk", "get",
                      "DeviceID,DriveType,FileSystem,FreeSpace,Size,VolumeName",
                      "/format:csv"],
-                    capture_output=True, text=True, check=True,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", check=True,
                 )
                 for line in result.stdout.strip().splitlines():
                     parts = [p.strip() for p in line.split(",")]
@@ -258,7 +258,7 @@ def detect_android_devices() -> list[Device]:
     try:
         result = subprocess.run(
             [str(adb_path), "devices", "-l"],
-            capture_output=True, text=True, check=True, timeout=10,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=10,
         )
         lines = [ln.strip() for ln in result.stdout.strip().splitlines()[1:] if ln.strip()]
         if not lines:
@@ -290,7 +290,7 @@ def detect_android_devices() -> list[Device]:
                 prop = subprocess.run(
                     [str(adb_path), "-s", serial, "shell", "getprop",
                      "ro.build.version.release"],
-                    capture_output=True, text=True, check=True, timeout=5,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=5,
                 )
                 os_version = f"Android {prop.stdout.strip()}"
             except (subprocess.SubprocessError, subprocess.TimeoutExpired):

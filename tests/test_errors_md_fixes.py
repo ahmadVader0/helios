@@ -336,3 +336,26 @@ def test_chainsaw_adapter_passes_mapping_arg(tmp_path: Path, monkeypatch: pytest
     idx = captured_cmd.index("--mapping")
     assert captured_cmd[idx + 1] == str(mapping_file)
 
+
+def test_subprocess_utf8_decoding_non_ascii_and_binary() -> None:
+    """run_subprocess must decode non-ASCII and invalid UTF-8 bytes safely without UnicodeDecodeError."""
+    import sys
+    from helios.adapters.base import ForensicToolAdapter, ToolRunResult
+
+    class DummyAdapter(ForensicToolAdapter):
+        def tool_name(self) -> str:
+            return "dummy"
+        def is_available(self) -> bool:
+            return True
+        def run(self, args: list[str], timeout: int = 300) -> ToolRunResult:
+            return self.run_subprocess([sys.executable, "-c", "import sys; sys.stdout.buffer.write(b'\\x90\\xff\\xfeHELLO\\n')"])
+        def parse_output(self, raw_output: str) -> list[Any]:
+            return []
+
+    adapter = DummyAdapter()
+    result = adapter.run([])
+    assert result.is_success()
+    assert "HELLO" in result.stdout
+    assert result.stderr == ""
+
+
