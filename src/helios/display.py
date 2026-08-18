@@ -148,48 +148,120 @@ def _build_helios_art() -> str:
 
 HELIOS_ART: str = _build_helios_art()
 
+BANNER_ART_FULL: list[str] = [
+    r"                  ▓▓▒▒▒",
+    r"              ▓▓▓▓▓▓▓▓▓▒▒▒░                       ▄        ▄      ▄█▄",
+    r"            ▓▓███████▓▓▓▒▒▒░░   ▄████   ████▄        ▄██       ▄██    ▀███▀      ▄██████▄     ▄██████▄",
+    r"           ▓▓█████████▓▓▓▒▒▒░░  █▓▓▓█\ /█████   ▄████████▄    ▄███     ▀█▀     ▄███▀▀▀▀███▄ ▄███▀▀  ▀▀",
+    r"          ▓▓▓█████████▓▓▓▒▒▒░░░ █▒▒▒█ ░ █████  ▄██▀▀▀▀▀███    ▐███    ▄███▄    ███▌\ \ ▐███ ▀██████▄▄",
+    r"          ▒▓▓▓███████▓▓▓▒▒▒░░░░ █████████████  ███████████     ███    ██▓██    ███▌ \ \▐███    ▀▀██████▄",
+    r"          ▒▒▓▓▓▓▓▓▓▓▓▓▓▒▒▒░░░░░ █▓▓▓█   █████  ███▄▄▄▄▄▄▄▄     ███    ██▓██    ▀███▄▄▄▄███▀ ▄▄▄   ▄▄███▀",
+    r"           ▒▒▒▒▓▓▓▓▓▒▒▒▒▒░░░░░  ▀███▀   ▀███▀   ▀████████▀    ▄███▄   ▀███▀      ▀██████▀   ▀████████▀",
+    r"            ░▒▒▒▒▒▒▒▒▒░░░░░░░",
+    r"              ░░░░░░░░░░░░░",
+    r"                  ░░░░░",
+]
+
+SUN_COMPACT: list[str] = [
+    "        ▓▓▒▒▒",
+    "    ▓▓▓▓▓▓▓▓▓▒▒▒░",
+    "  ▓▓███████▓▓▓▒▒▒░░",
+    " ▓▓█████████▓▓▓▒▒▒░░",
+    "▓▓▓█████████▓▓▓▒▒▒░░░",
+    "▒▓▓▓███████▓▓▓▒▒▒░░░░",
+    "▒▒▓▓▓▓▓▓▓▓▓▓▓▒▒▒░░░░░",
+    " ▒▒▒▒▓▓▓▓▓▒▒▒▒▒░░░░░",
+    "  ░▒▒▒▒▒▒▒▒▒░░░░░░░",
+    "    ░░░░░░░░░░░░░",
+    "        ░░░░░",
+]
+
+HELIOS_ART_MED: list[str] = [
+    r"                      ▄        ▄      ▄█▄",
+    r"▄████   ████▄        ▄██       ▄██    ▀███▀      ▄██████▄     ▄██████▄",
+    r"█▓▓▓█\ /█████   ▄████████▄    ▄███     ▀█▀     ▄███▀▀▀▀███▄ ▄███▀▀  ▀▀",
+    r"█▒▒▒█ ░ █████  ▄██▀▀▀▀▀███    ▐███    ▄███▄    ███▌\ \ ▐███ ▀██████▄▄",
+    r"█████████████  ███████████     ███    ██▓██    ███▌ \ \▐███    ▀▀██████▄",
+    r"█▓▓▓█   █████  ███▄▄▄▄▄▄▄▄     ███    ██▓██    ▀███▄▄▄▄███▀ ▄▄▄   ▄▄███▀",
+    r"▀███▀   ▀███▀   ▀████████▀    ▄███▄   ▀███▀      ▀██████▀   ▀████████▀",
+]
+
+HELIOS_ART_COMPACT: list[str] = [
+    "█   █ ████ █    ███  ███  ████",
+    "█   █ █    █     █  █   █ █   ",
+    "█████ ███  █     █  █   █ ████",
+    "█   █ █    █     █  █   █    █",
+    "█   █ ████ ████ ███  ███  ████",
+]
+
+TAGLINE = "Data Movement Forensics"
+BANNER_SUBTITLE = "Press [0] at any prompt to exit or [B] to go back"
+
 _GOLD_STYLE = "bold gold1"
 
 
-def build_banner_text(radius: int | None = None, include_tagline: bool = True) -> Text:
-    """Compose the golden Helios logo banner: round sun ball + HELIOS lettering.
+def build_banner_text(
+    radius: int | None = None,
+    include_tagline: bool = True,
+    width: int | None = None,
+) -> Text:
+    """Compose the golden Helios logo banner with adaptive terminal-width responsiveness.
 
-    The sun sits on the left with the HELIOS block lettering to its right,
-    vertically centered against the ball. Lines keep their exact widths so
-    the block glyphs stay aligned when wrapped in Align/Panel for display.
+    - Wide terminals (>= 110 cols): renders full side-by-side sun sphere + stylized HELIOS art.
+    - Medium terminals (80 - 109 cols): renders stacked sun sphere + stylized HELIOS art.
+    - Narrow terminals (< 80 cols): renders compact block HELIOS art to prevent wrapping.
     """
-    if radius is None:
-        radius = 4 if console.width < 100 else 5
-    sun_lines = generate_sun(radius)
-    title_lines = HELIOS_ART.split("\n")
-    sun_width = len(sun_lines[0])
-    title_width = len(title_lines[0])
-    top_pad = max((len(sun_lines) - len(title_lines)) // 2, 0)
-    bottom_pad = max(len(sun_lines) - top_pad - len(title_lines), 0)
-    padded_title: list[str] = [" " * title_width] * top_pad + title_lines + [" " * title_width] * bottom_pad
+    cur_width = width if width is not None else console.width
 
-    banner = Text()
-    for sun_line, title_line in zip(sun_lines, padded_title):
-        row = Text()
-        row.append(sun_line, style=_GOLD_STYLE)
-        row.append("   ", style="")
-        row.append(title_line, style=_GOLD_STYLE)
-        banner.append(row)
+    banner = Text(no_wrap=True)
+    if cur_width >= 110:
+        for line in BANNER_ART_FULL:
+            banner.append(line, style=_GOLD_STYLE)
+            banner.append("\n", style="")
+        if include_tagline:
+            banner.append("\n", style="")
+            banner.append(TAGLINE.center(104), style=_GOLD_STYLE)
+    elif cur_width >= 80:
+        for s in SUN_COMPACT:
+            banner.append(s.center(74), style=_GOLD_STYLE)
+            banner.append("\n", style="")
         banner.append("\n", style="")
-    if include_tagline:
-        tagline = "Data Movement Forensics"
-        banner.append("\n", style="")
-        banner.append(tagline.center(sun_width + 3 + title_width), style="bold gold1")
+        for h in HELIOS_ART_MED:
+            banner.append(h, style=_GOLD_STYLE)
+            banner.append("\n", style="")
+        if include_tagline:
+            banner.append("\n", style="")
+            banner.append(TAGLINE.center(74), style=_GOLD_STYLE)
+    else:
+        for c in HELIOS_ART_COMPACT:
+            banner.append(c.center(min(34, max(1, cur_width - 6))), style=_GOLD_STYLE)
+            banner.append("\n", style="")
+        if include_tagline:
+            banner.append("\n", style="")
+            banner.append(TAGLINE.center(min(34, max(1, cur_width - 6))), style=_GOLD_STYLE)
+
     return banner
 
 
-def build_banner_panel(radius: int | None = None) -> Panel:
-    """Build the golden Helios logo panel (round sun ball + HELIOS lettering)."""
+def build_banner_panel(
+    radius: int | None = None,
+    width: int | None = None,
+    subtitle: str | None = BANNER_SUBTITLE,
+) -> Panel:
+    """Build the golden Helios logo panel with adaptive sizing and heavy borders."""
+    cur_width = width if width is not None else console.width
+    text = build_banner_text(radius=radius, width=cur_width)
+    padding = (0, 2) if cur_width >= 110 else (0, 1)
+
+    sub_text = f"[dim]{subtitle}[/dim]" if (subtitle and cur_width >= 65) else None
+
     return Panel(
-        Align.center(build_banner_text(radius)),
-        box=box.ROUNDED,
+        Align.center(text),
+        box=box.HEAVY,
         border_style="gold1",
-        padding=(0, 4),
+        padding=padding,
+        subtitle=sub_text,
+        subtitle_align="right",
     )
 
 

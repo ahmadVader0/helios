@@ -38,6 +38,7 @@ from rich.table import Table
 from helios.config import HeliosConfig, load_config
 from helios.devices import detector
 from helios.display import (
+    build_banner_panel,
     build_banner_text,
     console,
     init_windows_console,
@@ -63,19 +64,11 @@ logger = logging.getLogger(__name__)
 
 # ── Golden Radiating Sun Banner ─────────────────────────────────────────────
 # The sun sphere and HELIOS lettering are generated in helios.display:
-# a shaded Unicode sphere (█ ▓ ▒ ░) with golden gradient, no emoji.
+# a shaded Unicode sphere (█ ▓ ▒ ░) with golden gradient and responsive layout.
 
 def render_menu_banner() -> None:
-    """Renders the golden Helios logo banner (sun sphere + block HELIOS lettering)."""
-    banner_panel = Panel(
-        Align.center(build_banner_text(radius=4 if console.width < 100 else 5)),
-        box=box.HEAVY,
-        border_style="gold1",
-        padding=(0, 2),
-        subtitle="[dim]Press [0] at any prompt to exit or [B] to go back[/dim]",
-        subtitle_align="right",
-    )
-    console.print(banner_panel)
+    """Renders the golden Helios logo banner with adaptive terminal sizing."""
+    console.print(build_banner_panel())
 
 
 # ── Robust Input & Navigation Utility Functions ────────────────────────────

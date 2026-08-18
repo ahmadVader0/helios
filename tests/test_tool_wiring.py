@@ -349,6 +349,7 @@ def test_bundled_tools_layout():
         tools_dir / "PECmd.exe",
         tools_dir / "RBCmd.exe",
         tools_dir / "SBECmd.exe",
+        tools_dir / "MFTECmd.exe",
         tools_dir / "chainsaw.exe",
         tools_dir / "adb.exe",
         tools_dir / "exiftool.exe",
@@ -366,7 +367,7 @@ def test_bundled_tools_layout():
     assert list((tools_dir / "linux64" / "lib").glob("*.so*")), "No Linux TSK shared libs"
 
     # Deleted tool bundles must stay deleted (dead code sweep)
-    for removed in ("MFTECmd.exe", "icat.exe", "mmls.exe", "icat", "mmls"):
+    for removed in ("icat.exe", "mmls.exe", "icat", "mmls"):
         assert not (tools_dir / removed).exists(), f"Stale bundled tool: {removed}"
 
 

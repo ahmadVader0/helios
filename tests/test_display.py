@@ -14,7 +14,7 @@ from helios.display import HELIOS_ART, build_banner_text, generate_sun
 # Allowed glyphs: block elements (U+2580–U+259F) and space. Explicitly no
 # emoji, pictographic characters, or line-drawing ray characters.
 _SUN_CHARS = set(" █▓▒░")
-_TITLE_CHARS = set(" █")
+_TITLE_CHARS = set(" █▄▀▐▌\\/▒▓░")
 
 
 def _render_panel(text: Text) -> str:
