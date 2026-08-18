@@ -304,3 +304,35 @@ def test_config_merges_tool_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     cfg = load_config(tmp_path)
     assert cfg.tool_paths.get("sleuthkit") == "/custom/bin/fls"
+
+
+def test_chainsaw_adapter_passes_mapping_arg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """ChainsawAdapter must pass --mapping <path> when running sigma hunt."""
+    from helios.adapters.chainsaw_adapter import ChainsawAdapter
+
+    adapter = ChainsawAdapter()
+    evtx_file = tmp_path / "Security.evtx"
+    evtx_file.write_bytes(b"ElfFile\x00")
+    rules_dir = tmp_path / "sigma_rules"
+    rules_dir.mkdir()
+    (rules_dir / "rule.yml").write_text("title: Test Rule\n", encoding="utf-8")
+    mapping_file = tmp_path / "mappings" / "sigma-event-logs-all.yml"
+    mapping_file.parent.mkdir(parents=True, exist_ok=True)
+    mapping_file.write_text("name: Test Mapping\n", encoding="utf-8")
+    out_json = tmp_path / "out.json"
+
+    captured_cmd: list[str] = []
+
+    def mock_run_subprocess(cmd: list[str], timeout: int = 300):
+        captured_cmd.extend(cmd)
+        from helios.adapters.base import ToolRunResult
+        return ToolRunResult(returncode=0, stdout="[]", stderr="", execution_time=0.01, command=cmd)
+
+    monkeypatch.setattr(adapter, "is_available", lambda: True)
+    monkeypatch.setattr(adapter, "run_subprocess", mock_run_subprocess)
+
+    adapter.run_sigma_hunt(evtx_file, rules_dir, out_json, mapping_file=mapping_file)
+    assert "--mapping" in captured_cmd
+    idx = captured_cmd.index("--mapping")
+    assert captured_cmd[idx + 1] == str(mapping_file)
+

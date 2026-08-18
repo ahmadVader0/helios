@@ -44,9 +44,41 @@ class ChainsawAdapter(ForensicToolAdapter):
             logger.warning("Chainsaw JSON parsing failed: %s. Output snippet: %s", e, raw_output[:200])
             return []
 
-    def run_sigma_hunt(self, evtx_dir: Path, sigma_rules_dir: Path, output_json: Path) -> list[Alert]:
+    def _resolve_mapping_file(self, explicit_mapping: Path | None = None) -> Path | None:
+        """Resolve Chainsaw mapping file."""
+        if explicit_mapping and explicit_mapping.exists():
+            return explicit_mapping
+
+        try:
+            from helios.config import get_bundle_root
+
+            bundle_root = get_bundle_root()
+            candidates = [
+                bundle_root / "tools" / "mappings" / "sigma-event-logs-all.yml",
+                bundle_root / "mappings" / "sigma-event-logs-all.yml",
+                bundle_root / "tools" / "mappings",
+                bundle_root / "mappings",
+                Path.cwd() / "tools" / "mappings" / "sigma-event-logs-all.yml",
+                Path.cwd() / "mappings" / "sigma-event-logs-all.yml",
+                Path(__file__).resolve().parent.parent.parent.parent / "tools" / "mappings" / "sigma-event-logs-all.yml",
+                Path(__file__).resolve().parent.parent.parent.parent / "mappings" / "sigma-event-logs-all.yml",
+            ]
+            for cand in candidates:
+                if cand.exists():
+                    return cand
+        except Exception as e:
+            logger.debug("Error resolving chainsaw mapping file: %s", e)
+        return None
+
+    def run_sigma_hunt(
+        self,
+        evtx_dir: Path,
+        sigma_rules_dir: Path,
+        output_json: Path,
+        mapping_file: Path | None = None,
+    ) -> list[Alert]:
         """
-        Execute `chainsaw hunt <evtx_dir> -s <sigma_rules_dir> --json` and parse results.
+        Execute `chainsaw hunt <evtx_dir> -s <sigma_rules_dir> --mapping <mapping> --json` and parse results.
         Supports both directories and single .evtx files as input.
         """
         if not self.is_available():
@@ -64,7 +96,12 @@ class ChainsawAdapter(ForensicToolAdapter):
             logger.warning(f"Sigma rules directory not found: {sigma_rules_dir}")
             return []
 
-        args = ["hunt", str(evtx_dir), "-s", str(sigma_rules_dir), "--json"]
+        mapping = self._resolve_mapping_file(mapping_file)
+        args = ["hunt", str(evtx_dir), "-s", str(sigma_rules_dir)]
+        if mapping:
+            args.extend(["--mapping", str(mapping)])
+        args.append("--json")
+
         result = self.run(args, timeout=600)
 
         # Only trust the hunt output when chainsaw actually succeeded. A
