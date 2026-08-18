@@ -49,3 +49,8 @@ demo_output/
 *.swo
 *~
 .DS_Store
+
+# Agent and Audit files
+.agents/
+AGENTS.md
+AUDIT_REPORT.md
