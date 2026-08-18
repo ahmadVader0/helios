@@ -1,0 +1,74 @@
+# Helios Investigation Profiles Configuration
+#
+# Module keys map to the gates implemented in src/helios/menu.py:
+#   usb_transfers, file_deletions, recent_file_access, event_logs,
+#   program_execution, shellbags, deleted_file_recovery,
+#   suspicious_files, cross_device_matching
+
+profiles:
+  exfiltration:
+    description: "Focuses on data exfiltration vectors: USB transfers, file deletions, recent LNK/JumpList access, cross-device hash matching, and suspicious files."
+    modules:
+      enabled:
+        - usb_transfers
+        - file_deletions
+        - recent_file_access
+        - cross_device_matching
+        - suspicious_files
+        - deleted_file_recovery
+      disabled:
+        - program_execution
+        - event_logs
+        - shellbags
+
+  employee_exit:
+    description: "Insider threat focus: USB activity, recent file access (LNK/JumpLists), deletions, ShellBags folder history, recovered deleted files, and suspicious files."
+    modules:
+      enabled:
+        - usb_transfers
+        - file_deletions
+        - recent_file_access
+        - shellbags
+        - suspicious_files
+        - cross_device_matching
+        - deleted_file_recovery
+        - mft_analysis
+        - usn_journal
+      disabled:
+        - program_execution
+        - event_logs
+
+  incident_response:
+    description: "Compromise detection: program execution (Prefetch), Windows event logs, ShellBags, suspicious files, recovered deleted files, and deletion timelines."
+    modules:
+      enabled:
+        - program_execution
+        - suspicious_files
+        - event_logs
+        - shellbags
+        - file_deletions
+        - deleted_file_recovery
+        - mft_analysis
+        - usn_journal
+      disabled:
+        - usb_transfers
+        - cross_device_matching
+        - recent_file_access
+
+  full:
+    description: "Enables all forensic analysis modules for exhaustive evidence collection and analysis."
+    modules:
+      enabled:
+        - usb_transfers
+        - file_deletions
+        - recent_file_access
+        - event_logs
+        - program_execution
+        - shellbags
+        - deleted_file_recovery
+        - suspicious_files
+        - cross_device_matching
+        - mft_analysis
+        - usn_journal
+      disabled: []
+

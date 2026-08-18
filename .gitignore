@@ -1,0 +1,51 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# Build & Packaging
+build/
+dist/
+*.egg-info/
+*.egg
+*.manifest
+!helios.spec
+
+# Environment & Secret files
+.env
+.env.local
+.env.*.local
+
+# Project Specific Ignored Paths
+cases/
+config/custom_*.yaml
+
+# Runtime outputs
+reports/
+snapshots/
+demo_output/
+
+# Tooling caches
+.mypy_cache/
+.ruff_cache/
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store

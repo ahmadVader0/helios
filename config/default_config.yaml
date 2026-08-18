@@ -1,0 +1,43 @@
+# Helios Default Configuration
+
+tool_paths:
+  sleuthkit: "auto"
+  autopsy: "auto"
+  adb: "auto"
+  aleapp: "auto"
+  volatility: "auto"
+  7zip: "auto"
+  plaso: "auto"
+  log2timeline: "auto"
+
+working_hours:
+  start: "08:00"
+  end: "18:00"
+  days:
+    - "Monday"
+    - "Tuesday"
+    - "Wednesday"
+    - "Thursday"
+    - "Friday"
+
+hashing:
+  algorithm: "sha256"
+  hash_large_files: true
+  large_file_threshold_mb: 500
+
+scanning:
+  max_depth: null
+  skip_media: false
+  skip_system_dirs: true
+
+report:
+  theme: "corporate"
+  company_name: ""
+  logo_path: ""
+  output_format:
+    - "html"
+    - "json"
+
+evidence:
+  create_package: true
+  include_raw_artifacts: false

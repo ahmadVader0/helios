@@ -1,0 +1,102 @@
+# Helios Device Profiles Configuration
+
+device_types:
+  pc_laptop:
+    name: "PC / Laptop"
+    description: "Windows host workstation or laptop device profile with full artifact analysis."
+    modules:
+      registry_analysis:
+        enabled: true
+      event_logs:
+        enabled: true
+      lnk_parser:
+        enabled: true
+      shellbags:
+        enabled: true
+      jump_lists:
+        enabled: true
+      usn_journal:
+        enabled: true
+      browser_history:
+        enabled: true
+      file_listing:
+        enabled: true
+      deleted_files:
+        enabled: true
+      prefetches:
+        enabled: true
+      shimcache:
+        enabled: true
+      file_carving:
+        enabled: true
+      adb_collector:
+        enabled: false
+      aleapp_parser:
+        enabled: false
+
+  usb:
+    name: "USB Removable Storage"
+    description: "Removable USB flash drive or external storage device profile."
+    modules:
+      file_listing:
+        enabled: true
+      deleted_files:
+        enabled: true
+      file_carving:
+        enabled: true
+      usn_journal:
+        enabled: true
+        condition: "ntfs_only"
+      registry_analysis:
+        enabled: false
+      event_logs:
+        enabled: false
+      lnk_parser:
+        enabled: false
+      shellbags:
+        enabled: false
+      jump_lists:
+        enabled: false
+      browser_history:
+        enabled: false
+      prefetches:
+        enabled: false
+      shimcache:
+        enabled: false
+      adb_collector:
+        enabled: false
+      aleapp_parser:
+        enabled: false
+
+  android:
+    name: "Android Mobile Device"
+    description: "Android smartphone or tablet device profile."
+    modules:
+      adb_collector:
+        enabled: true
+      aleapp_parser:
+        enabled: true
+      file_listing:
+        enabled: true
+      app_listing:
+        enabled: true
+      registry_analysis:
+        enabled: false
+      event_logs:
+        enabled: false
+      lnk_parser:
+        enabled: false
+      shellbags:
+        enabled: false
+      jump_lists:
+        enabled: false
+      usn_journal:
+        enabled: false
+      browser_history:
+        enabled: false
+      prefetches:
+        enabled: false
+      shimcache:
+        enabled: false
+      file_carving:
+        enabled: false

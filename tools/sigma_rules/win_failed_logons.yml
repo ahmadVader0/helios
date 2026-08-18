@@ -1,0 +1,15 @@
+title: Failed Logons with Exclusions
+id: a9c5c1c4-1d7a-4c2e-a01a-5f5a8b7d9e05
+status: stable
+description: Detects repeated failed logon attempts (Event ID 4625) indicating brute-force password attacks.
+references:
+  - https://attack.mitre.org/techniques/T1110/
+author: Helios Forensic Engine
+logsource:
+  product: windows
+  service: security
+detection:
+  selection:
+    EventID: 4625
+  condition: selection
+level: medium

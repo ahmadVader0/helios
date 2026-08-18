@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "helios"
+version = "0.1.0"
+description = "Data movement forensics — tracks what was moved, copied, deleted, or transferred across live devices"
+requires-python = ">=3.11"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Ahmad"}]
+dependencies = [
+    "click>=8.0",
+    "rich>=13.0",
+    "pyyaml>=6.0",
+    "xxhash>=3.0",
+    "jinja2>=3.0",
+]
+
+[project.scripts]
+helios = "helios.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_configs = true
+
+# Windows-only and optional forensic-module files cannot be fully type
+# checked on non-Windows hosts (winreg, ctypes.windll, python-registry, Evtx).
+[[tool.mypy.overrides]]
+module = [
+    "helios.devices.detector",
+    "helios.analyzers.event_logs",
+    "helios.analyzers.usb_history",
+]
+disable_error_code = ["attr-defined", "import-not-found", "arg-type", "assignment"]

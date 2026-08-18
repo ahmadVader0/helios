@@ -1,0 +1,15 @@
+title: New Service Installed
+id: a9c5c1c4-1d7a-4c2e-a01a-5f5a8b7d9e04
+status: stable
+description: Detects installation of a new Windows service (Event ID 7045), which may indicate persistence.
+references:
+  - https://attack.mitre.org/techniques/T1543/003/
+author: Helios Forensic Engine
+logsource:
+  product: windows
+  service: system
+detection:
+  selection:
+    EventID: 7045
+  condition: selection
+level: low

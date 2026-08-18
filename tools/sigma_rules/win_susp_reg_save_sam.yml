@@ -1,0 +1,20 @@
+title: Credential Dumping via Security Account Manager
+id: a9c5c1c4-1d7a-4c2e-a01a-5f5a8b7d9e03
+status: stable
+description: Detects access to the Security Account Manager (SAM) registry hive, often a precursor to credential dumping.
+references:
+  - https://attack.mitre.org/techniques/T1003/002/
+author: Helios Forensic Engine
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith:
+      - reg.exe
+    CommandLine|contains|all:
+      - save
+      - HKEY_LOCAL_MACHINE
+      - SAM
+  condition: selection
+level: high

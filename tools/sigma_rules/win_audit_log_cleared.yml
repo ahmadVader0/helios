@@ -1,0 +1,15 @@
+title: Audit Log Cleared
+id: a9c5c1c4-1d7a-4c2e-a01a-5f5a8b7d9e01
+status: stable
+description: Detects clearing of the Windows Security audit log (Event ID 1102), a common anti-forensics action.
+references:
+  - https://attack.mitre.org/techniques/T1070/
+author: Helios Forensic Engine
+logsource:
+  product: windows
+  service: security
+detection:
+  selection:
+    EventID: 1102
+  condition: selection
+level: critical

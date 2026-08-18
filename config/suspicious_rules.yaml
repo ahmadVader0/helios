@@ -1,0 +1,146 @@
+# Helios Suspicious Rules Configuration
+
+rules:
+  executables_on_usb:
+    id: "RULE-001"
+    name: "Executable Files on Removable Drives"
+    description: "Detects executable and script files stored on USB or removable storage devices."
+    severity: "HIGH"
+    enabled: true
+    extensions:
+      - ".exe"
+      - ".bat"
+      - ".ps1"
+      - ".vbs"
+      - ".cmd"
+    target_drive_type: "removable"
+
+  double_extensions:
+    id: "RULE-002"
+    name: "Double File Extensions"
+    description: "Detects suspicious double extension patterns used to masquerade malicious executables (e.g. report.pdf.exe)."
+    severity: "CRITICAL"
+    enabled: true
+    common_masquerade_extensions:
+      - ".pdf"
+      - ".docx"
+      - ".xlsx"
+      - ".jpg"
+      - ".png"
+      - ".txt"
+
+  hidden_in_unusual_locations:
+    id: "RULE-003"
+    name: "Hidden Files in Non-Standard Locations"
+    description: "Detects hidden files located outside standard operating system directories."
+    severity: "MEDIUM"
+    enabled: true
+    exclude_directories:
+      - "/Windows"
+      - "/Program Files"
+      - "/Program Files (x86)"
+      - "/usr"
+      - "/etc"
+      - "/var"
+      - "/System"
+      - "/Library"
+
+  encrypted_containers:
+    id: "RULE-004"
+    name: "Encrypted Container Headers Detected"
+    description: "Detects presence of encrypted storage volume headers (VeraCrypt, BitLocker, TrueCrypt)."
+    severity: "HIGH"
+    enabled: true
+    signatures:
+      - name: "VeraCrypt"
+        header: "VERA"
+      - name: "TrueCrypt"
+        header: "TRUE"
+      - name: "BitLocker"
+        header: "-FVE-FS-"
+
+  large_archives_in_temp:
+    id: "RULE-005"
+    name: "Large Archive Files in Temporary Directories"
+    description: "Detects archive files over 100MB stored inside system or user temporary directories."
+    severity: "HIGH"
+    enabled: true
+    max_size_mb: 100
+    archive_extensions:
+      - ".zip"
+      - ".rar"
+      - ".7z"
+      - ".tar"
+      - ".gz"
+      - ".tgz"
+    target_directories:
+      - "Temp"
+      - "tmp"
+      - "AppData/Local/Temp"
+      - "/tmp"
+      - "/var/tmp"
+
+  mass_deletion:
+    id: "RULE-006"
+    name: "Mass File Deletion Event"
+    description: "Detects deletion of 20 or more files within a 5-minute time window."
+    severity: "HIGH"
+    enabled: true
+    threshold_count: 20
+    time_window_minutes: 5
+
+  after_hours_usb:
+    id: "RULE-007"
+    name: "After-Hours USB Connection"
+    description: "Detects USB device connections occurring outside configured working hours."
+    severity: "MEDIUM"
+    enabled: true
+    reference_schedule: "working_hours"
+
+  password_protected_archives:
+    id: "RULE-008"
+    name: "Password Protected Archives"
+    description: "Detects password-protected or encrypted zip, rar, or 7z archive files."
+    severity: "MEDIUM"
+    enabled: true
+    archive_extensions:
+      - ".zip"
+      - ".rar"
+      - ".7z"
+
+  extension_mismatch:
+    id: "RULE-009"
+    name: "File Extension Mismatch"
+    description: "Detects files where magic header bytes do not match the declared file extension."
+    severity: "HIGH"
+    enabled: true
+
+  executables_in_content_dirs:
+    id: "RULE-011"
+    name: "Executables & Scripts in User-Content Folders"
+    description: "Detects dangerous file types (.exe, .vbs, .js, .hta, .ps1, .jar, .scr, .msi, ...) inside Downloads, Documents, Desktop, Temp or attachment folders where they have no legitimate business."
+    severity: "MEDIUM"
+    enabled: true
+
+  script_binary_disguise:
+    id: "RULE-012"
+    name: "Script Extension Masking a Compiled Binary"
+    description: "Detects script files (.vbs, .js, .bat, .ps1...) that actually start with a compiled PE/ELF header (MZ/ELF magic) — a common malware smuggling technique."
+    severity: "HIGH"
+    enabled: true
+
+  scripts_outside_system_dirs:
+    id: "RULE-013"
+    name: "Scripts Outside System Directories"
+    description: "Detects script files (.bat, .cmd, .vbs, .ps1, ...) located anywhere outside standard system directories (Windows, System32, Program Files, /usr, /bin, ...) — e.g. scan roots, user folders, or USB drives where a script has no legitimate business."
+    severity: "MEDIUM"
+    enabled: true
+
+  autorun_files:
+    id: "RULE-010"
+    name: "Autorun Files on Removable Media"
+    description: "Detects presence of autorun.inf files on removable USB storage media."
+    severity: "HIGH"
+    enabled: true
+    filename: "autorun.inf"
+    target_drive_type: "removable"

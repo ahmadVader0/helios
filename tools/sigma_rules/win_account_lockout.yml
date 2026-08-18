@@ -1,0 +1,15 @@
+title: Account Lockout
+id: a9c5c1c4-1d7a-4c2e-a01a-5f5a8b7d9e02
+status: stable
+description: Detects Windows account lockout events (Event ID 4740), which may indicate brute-force password attacks.
+references:
+  - https://attack.mitre.org/techniques/T1110/
+author: Helios Forensic Engine
+logsource:
+  product: windows
+  service: security
+detection:
+  selection:
+    EventID: 4740
+  condition: selection
+level: medium

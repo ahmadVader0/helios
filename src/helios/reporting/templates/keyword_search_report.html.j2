@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Helios Keyword Search Report — {{ search_title }}</title>
+    <style>
+        :root {
+            --blue: #1d4ed8;
+            --blue-soft: #eff6ff;
+            --ink: #1f2937;
+            --muted: #6b7280;
+            --line: #e5e7eb;
+            --bg: #f5f7fa;
+            --card: #ffffff;
+            --high: #ea580c;
+            --med: #d97706;
+            --ok: #16a34a;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            background: var(--bg);
+            color: var(--ink);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        code, .mono {
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 12px;
+            background: #f3f4f6;
+            padding: 1px 5px;
+            border-radius: 3px;
+            word-break: break-all;
+        }
+
+        .topbar {
+            background: var(--card);
+            border-bottom: 1px solid var(--line);
+            padding: 14px 32px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .brand { display: flex; align-items: center; gap: 12px; }
+        .brand-mark {
+            background: var(--blue); color: #fff;
+            width: 34px; height: 34px; border-radius: 8px;
+            display: flex; align-items: center; justify-content: center;
+            font-weight: 800; font-size: 16px;
+        }
+        .brand-name { font-weight: 700; font-size: 16px; }
+        .brand-sub { font-size: 12px; color: var(--muted); }
+        .case-meta { display: flex; gap: 24px; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+        .case-meta strong { color: var(--ink); }
+
+        main { padding: 24px 32px 48px; max-width: 1280px; margin: 0 auto; }
+
+        .card {
+            background: var(--card);
+            border: 1px solid var(--line);
+            border-radius: 10px;
+            padding: 18px 20px;
+            margin-bottom: 18px;
+        }
+
+        .card h2 { font-size: 17px; margin-bottom: 10px; color: var(--ink); }
+
+        .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-bottom: 18px; }
+        .metric {
+            background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+            padding: 14px 16px;
+        }
+        .metric .value { font-size: 26px; font-weight: 800; color: var(--blue); }
+        .metric .label { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+        .keywords { display: flex; flex-wrap: wrap; gap: 8px; }
+        .keyword-tag {
+            background: var(--blue-soft); color: var(--blue);
+            border: 1px solid #bfdbfe; border-radius: 20px;
+            padding: 3px 12px; font-size: 12.5px; font-weight: 600;
+        }
+
+        table.report-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        table.report-table th {
+            text-align: left; background: var(--blue-soft);
+            color: var(--ink); padding: 9px 10px;
+            border-bottom: 2px solid var(--line); font-weight: 700;
+        }
+        table.report-table td {
+            padding: 8px 10px; border-bottom: 1px solid var(--line);
+            vertical-align: top;
+        }
+        table.report-table tr:hover td { background: #fafbfc; }
+
+        .type-badge {
+            border-radius: 20px; padding: 2px 10px; font-size: 11.5px; font-weight: 700;
+            text-transform: uppercase;
+        }
+        .type-content { background: var(--blue-soft); color: var(--blue); }
+        .type-name { background: #f0fdf4; color: var(--ok); }
+        .type-path { background: #fffbeb; color: var(--med); }
+
+        .empty-state {
+            color: var(--muted); text-align: center; padding: 32px 0; font-size: 14px;
+        }
+
+        .note { font-size: 12.5px; color: var(--muted); margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand">
+            <div class="brand-mark">H</div>
+            <div>
+                <div class="brand-name">Helios — Keyword Search Report</div>
+                <div class="brand-sub">Data-exfiltration keyword triage</div>
+            </div>
+        </div>
+        <div class="case-meta">
+            <span>Generated: <strong>{{ generated_at }}</strong></span>
+            <span>Target: <strong>{{ search_target }}</strong></span>
+            <span>Preset: <strong>{{ search_title }}</strong></span>
+        </div>
+    </header>
+
+    <main>
+        <div class="metrics">
+            <div class="metric">
+                <div class="value">{{ total_hits }}</div>
+                <div class="label">Total Matches</div>
+            </div>
+            <div class="metric">
+                <div class="value">{{ count_by_type.get('name', 0) }}</div>
+                <div class="label">File-Name Matches</div>
+            </div>
+            <div class="metric">
+                <div class="value">{{ count_by_type.get('path', 0) }}</div>
+                <div class="label">Path Matches</div>
+            </div>
+            <div class="metric">
+                <div class="value">{{ count_by_type.get('content', 0) }}</div>
+                <div class="label">Content Matches</div>
+            </div>
+            <div class="metric">
+                <div class="value">{{ files_scanned }}</div>
+                <div class="label">Files Scanned</div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h2>Search Terms</h2>
+            <div class="keywords">
+                {% for kw in keywords %}
+                <span class="keyword-tag">{{ kw }}</span>
+                {% endfor %}
+            </div>
+            <p class="note">
+                Content search only opens text-like files up to {{ max_content_size_mb }} MB
+                ({{ max_lines }} lines scanned per file, {{ max_hits_per_file }} hits per file).
+                Binary, media and archive files are matched by name/path only.
+            </p>
+        </div>
+
+        <div class="card">
+            <h2>Match Results ({{ total_hits }})</h2>
+            {% if results %}
+            <table class="report-table">
+                <thead>
+                    <tr>
+                        <th>Match Type</th>
+                        <th>Keyword</th>
+                        <th>File</th>
+                        <th>Path</th>
+                        <th>Context</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in results %}
+                    <tr>
+                        <td><span class="type-badge type-{{ r.match_type }}">{{ r.match_type }}</span></td>
+                        <td><code>{{ r.keyword }}</code></td>
+                        <td><strong>{{ r.file_name }}</strong></td>
+                        <td><code>{{ r.file_path }}</code></td>
+                        <td>
+                            {% if r.line_number %}<span class="note">line {{ r.line_number }}:</span>{% endif %}
+                            <span>{{ r.match_context }}</span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="empty-state">No matches found for the selected keywords in the scanned location.</p>
+            {% endif %}
+        </div>
+    </main>
+</body>
+</html>

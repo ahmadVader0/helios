@@ -1,0 +1,15 @@
+title: USB Device Connection Detected
+id: a9c5c1c4-1d7a-4c2e-a01a-5f5a8b7d9e06
+status: stable
+description: Detects plugging of a USB storage device (Event IDs 20001/20003) for data movement tracking.
+author: Helios Forensic Engine
+logsource:
+  product: windows
+  service: system
+detection:
+  selection:
+    EventID:
+      - 20001
+      - 20003
+  condition: selection
+level: low

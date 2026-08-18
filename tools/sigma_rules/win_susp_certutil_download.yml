@@ -1,0 +1,19 @@
+title: Suspicious Download via Certutil
+id: a9c5c1c4-1d7a-4c2e-a01a-5f5a8b7d9e07
+status: stable
+description: Detects usage of certutil to download or decode payloads, a known exfiltration and download technique.
+references:
+  - https://attack.mitre.org/techniques/T1105/
+author: Helios Forensic Engine
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith:
+      - certutil.exe
+    CommandLine|contains:
+      - -urlcache
+      - -decode
+  condition: selection
+level: high

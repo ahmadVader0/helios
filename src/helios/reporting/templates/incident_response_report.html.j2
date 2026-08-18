@@ -1,0 +1,206 @@
+{% extends "_base.html.j2" %}
+{% from "_macros.html.j2" import metric_card, events_table, key_findings_card, devices_card, module_exec_card, alerts_panel_card, evidence_panel_card with context %}
+
+{% block report_title %}Helios Incident Response Report — {{ investigation.case_name }}{% endblock %}
+
+{% block profile_label %}Incident Response{% endblock %}
+{% block brand_sub %}Program execution, Windows event logs, folder history & suspicious files{% endblock %}
+
+{% block tabs_html %}
+<button class="tab active" data-panel="tab-summary">Summary</button>
+<button class="tab" data-panel="tab-events">Events</button>
+<button class="tab" data-panel="tab-alerts">Alerts</button>
+<button class="tab" data-panel="tab-evidence">Evidence</button>
+{% endblock %}
+
+{% block panels_html %}
+
+<!-- ================= SUMMARY ================= -->
+<div id="tab-summary" class="panel active">
+    <h2 class="section-title">Incident Response Summary</h2>
+    <p class="section-desc">Host compromise analysis: executed programs, Windows event logs, Sigma rule matches, folder navigation, and suspicious files.</p>
+
+    <div class="metric-row">
+        {{ metric_card(investigation.events | length, "Forensic Events", "tab-events", "sec-events", "View event log") }}
+        {{ metric_card(investigation.alerts | length, "Alerts Raised", "tab-alerts", "sec-alerts", "View alerts", "warn") }}
+        {{ metric_card(deletions | length, "Deleted Files", "tab-summary", "sec-deletions", "View deletions", "danger") }}
+        {{ metric_card(investigation.file_records | length, "Files Indexed", "tab-summary", "sec-devices", "View scanned devices") }}
+    </div>
+
+    <div class="chart-grid {% if not sections.deletion_chart %}single{% endif %}">
+        <div class="card">
+            <h3>File Types Distribution</h3>
+            <div id="filetypeChart"></div>
+        </div>
+        {% if sections.deletion_chart %}
+        <div class="card">
+            <h3>Deletions Timeline</h3>
+            <div id="deletionChart"></div>
+        </div>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h3>Executed Programs (Prefetch / Process Activity)</h3>
+        <p class="section-desc">Executables run on the target host — extracted from Windows Prefetch (.pf) files and service installations.</p>
+        {% if executed_programs %}
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th class="size-nowrap">Timestamp</th>
+                    <th>Program / Path</th>
+                    <th>Source</th>
+                    <th class="size-nowrap">Confidence</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in executed_programs[:300] %}
+                <tr>
+                    <td class="size-nowrap">{{ r.timestamp }}</td>
+                    <td><code>{{ r.path or '-' }}</code></td>
+                    <td>{{ r.raw_source }}</td>
+                    <td class="size-nowrap">{{ r.confidence }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if executed_programs | length > 300 %}<p class="empty-state">Showing first 300 of {{ executed_programs | length }} entries.</p>{% endif %}
+        {% else %}
+        <p class="empty-state">No program execution events detected.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h3>Windows Event Logs &amp; Sigma Rule Matches</h3>
+        <p class="section-desc">Security and System event log entries, logon activity (4624/4625), service creations (7045), and Sigma hunt matches.</p>
+        {% if event_log_rows %}
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th class="size-nowrap">Timestamp</th>
+                    <th>Event Details / Path</th>
+                    <th>Source</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in event_log_rows[:200] %}
+                <tr>
+                    <td class="size-nowrap">{{ r.timestamp }}</td>
+                    <td><code>{{ r.path or '-' }}</code></td>
+                    <td>{{ r.raw_source }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if event_log_rows | length > 200 %}<p class="empty-state">Showing first 200 of {{ event_log_rows | length }} log entries.</p>{% endif %}
+        {% else %}
+        <p class="empty-state">No suspicious Windows event log anomalies detected.</p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h3>Folder Exploration History (ShellBags)</h3>
+        <p class="section-desc">Explorer directory navigation and user folder traversal.</p>
+        {% if shellbags_rows %}
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th class="size-nowrap">Timestamp</th>
+                    <th>Folder Path</th>
+                    <th>Source</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for r in shellbags_rows[:200] %}
+                <tr>
+                    <td class="size-nowrap">{{ r.timestamp }}</td>
+                    <td><code>{{ r.path or '-' }}</code></td>
+                    <td>{{ r.raw_source }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if shellbags_rows | length > 200 %}<p class="empty-state">Showing first 200 of {{ shellbags_rows | length }} folder entries.</p>{% endif %}
+        {% else %}
+        <p class="empty-state">No ShellBags activity detected.</p>
+        {% endif %}
+    </div>
+
+    <div class="card" id="sec-deletions">
+        <h3>Recovered Shift+Deleted Files (SleuthKit / MFT Scanner)</h3>
+        <p class="section-desc">Unallocated and Shift+Deleted files recovered directly from filesystem structures.</p>
+        {% if deleted_files %}
+        <table class="report-table">
+            <thead>
+                <tr>
+                    <th>File Name</th>
+                    <th>Path</th>
+                    <th class="size-nowrap">Size</th>
+                    <th class="size-nowrap">Modified</th>
+                    <th>Recovery Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in deleted_files[:300] %}
+                <tr>
+                    <td><strong>{{ f.file_name }}</strong></td>
+                    <td><code>{{ f.file_path }}</code></td>
+                    <td class="size-nowrap">{{ f.size }} bytes</td>
+                    <td class="size-nowrap">{{ f.modified }}</td>
+                    <td>
+                        {% if f.recovery_status == 'RECOVERABLE' %}
+                        <span class="badge badge-ok">Recoverable</span>
+                        {% elif f.recovery_status == 'PARTIAL' %}
+                        <span class="badge badge-warn">Partial</span>
+                        {% else %}
+                        <span class="badge badge-blue">{{ f.recovery_status }}</span>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% if deleted_files | length > 300 %}<p class="empty-state">Showing first 300 of {{ deleted_files | length }} entries.</p>{% endif %}
+        {% else %}
+        <p class="empty-state">No Shift+Deleted files recovered on the target drives.</p>
+        {% endif %}
+    </div>
+
+    {{ key_findings_card() }}
+    {{ devices_card() }}
+    {{ module_exec_card() }}
+</div>
+
+<!-- ================= EVENTS ================= -->
+<div id="tab-events" class="panel">
+    <h2 class="section-title">Incident Event Log</h2>
+    <p class="section-desc">Program execution, Windows event logs, and filesystem changes relevant to incident response.</p>
+    <div class="card" id="sec-events">
+        {% set ir_events = [] %}
+        {% for r in timeline_rows if r.type in ('APP_EXECUTE', 'FILE_DELETE', 'FILE_CREATE', 'FILE_MODIFY', 'EVENT_LOG') %}
+            {% if ir_events.append(r) %}{% endif %}
+        {% endfor %}
+        {{ events_table(ir_events) }}
+    </div>
+</div>
+
+<!-- ================= ALERTS ================= -->
+<div id="tab-alerts" class="panel">
+    <h2 class="section-title">Compromise &amp; Security Alerts</h2>
+    <p class="section-desc">Threat heuristics, Sigma hunt detections, timestomping, and execution anomalies.</p>
+    {{ alerts_panel_card() }}
+</div>
+
+<!-- ================= EVIDENCE ================= -->
+<div id="tab-evidence" class="panel">
+    <h2 class="section-title">Evidence &amp; Chain of Custody</h2>
+    <p class="section-desc">Case identification and the audit log of every tool action taken.</p>
+    {{ evidence_panel_card() }}
+</div>
+
+{% endblock %}
+
+{% block charts_js %}
+['#filetypeChart', {{ filetype_chart_json | safe }}],
+{% if sections.deletion_chart %}['#deletionChart', {{ deletion_chart_json | safe }}],{% endif %}
+{% endblock %}

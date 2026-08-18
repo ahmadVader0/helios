@@ -1,0 +1,506 @@
+"""Helios display module — Rich terminal output for forensic data."""
+
+from __future__ import annotations
+
+import math
+import sys
+
+from rich import box
+from rich.align import Align
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
+from rich.table import Table
+from rich.text import Text
+
+from helios.models import (
+    Alert,
+    Confidence,
+    DataEvent,
+    Device,
+    DriveInfo,
+    EventType,
+    FileRecord,
+    Investigation,
+    RecoveryStatus,
+    ScanOptions,
+    Severity,
+)
+from helios.utils.file_utils import format_size
+
+
+# ── Windows Console UTF-8 Initializer ──────────────────────────────────────
+
+def init_windows_console() -> None:
+    """Ensure Windows console is configured for UTF-8 code page (65001).
+
+    Prevents Unicode characters and icons from rendering as question marks '?'
+    on standard Windows CMD, PowerShell, and compiled PyInstaller executables.
+    """
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+            ctypes.windll.kernel32.SetConsoleCP(65001)
+        except Exception:
+            pass
+        try:
+            if hasattr(sys.stdout, "reconfigure"):
+                sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            if hasattr(sys.stderr, "reconfigure"):
+                sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+            if hasattr(sys.stdin, "reconfigure"):
+                sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+init_windows_console()
+
+# ── Module-level console ────────────────────────────────────────────────────
+
+console = Console(highlight=False, legacy_windows=False)
+
+# ── Color maps ──────────────────────────────────────────────────────────────
+
+SEVERITY_STYLES: dict[Severity, str] = {
+    Severity.CRITICAL: "bold red",
+    Severity.HIGH: "dark_orange",
+    Severity.MEDIUM: "yellow",
+    Severity.LOW: "blue",
+    Severity.INFO: "dim",
+}
+
+EVENT_STYLES: dict[EventType, str] = {
+    EventType.FILE_CREATE: "green",
+    EventType.FILE_DELETE: "red",
+    EventType.FILE_MOVE: "yellow",
+    EventType.FILE_RENAME: "bright_yellow",
+    EventType.FILE_MODIFY: "white",
+    EventType.FILE_COPY: "cyan",
+    EventType.FILE_ACCESS: "bright_cyan",
+    EventType.USB_CONNECT: "magenta",
+    EventType.USB_DISCONNECT: "bright_magenta",
+    EventType.APP_EXECUTE: "bright_blue",
+    EventType.DEVICE_CONNECT: "bright_green",
+}
+
+CONFIDENCE_LABELS: dict[Confidence, str] = {
+    Confidence.HIGH: "[green]HIGH[/]",
+    Confidence.MEDIUM: "[yellow]MED[/]",
+    Confidence.LOW: "[red]LOW[/]",
+}
+
+
+# ── Banner ──────────────────────────────────────────────────────────────────
+
+def generate_sun(radius: int = 5) -> list[str]:
+    """Generate a visually round sun sphere from block elements.
+
+    Monospace terminal font characters are roughly twice as tall as they are wide (2:1 aspect ratio).
+    To render a visually round circle on screen, horizontal steps are doubled
+    (width = 4*radius + 1, height = 2*radius + 1).
+    """
+    height = radius * 2 + 1
+    width_radius = radius * 2
+    width = width_radius * 2 + 1
+    grid: list[list[str]] = [[" "] * width for _ in range(height)]
+
+    for y in range(-radius, radius + 1):
+        for x in range(-width_radius, width_radius + 1):
+            norm_x = x / 2.0
+            if norm_x * norm_x + y * y > (radius + 0.2) ** 2:
+                continue
+            light = 1 - math.hypot(norm_x + radius * 0.3, y + radius * 0.3) / (radius * 1.35)
+            if light > 0.66:
+                shade = "█"
+            elif light > 0.45:
+                shade = "▓"
+            elif light > 0.24:
+                shade = "▒"
+            else:
+                shade = "░"
+            grid[radius + y][width_radius + x] = shade
+
+    return ["".join(row) for row in grid]
+
+
+_HELIOS_GLYPHS: dict[str, tuple[str, ...]] = {
+    "H": ("█   █", "█   █", "█████", "█   █", "█   █", "█   █"),
+    "E": ("█████", "█    ", "███  ", "█    ", "█    ", "█████"),
+    "L": ("█    ", "█    ", "█    ", "█    ", "█    ", "█████"),
+    "I": (" ███ ", "  █  ", "  █  ", "  █  ", "  █  ", " ███ "),
+    "O": ("█████", "█   █", "█   █", "█   █", "█   █", "█████"),
+    "S": ("█████", "█    ", "█████", "    █", "█   █", "█████"),
+}
+
+
+def _build_helios_art() -> str:
+    """Compose the 6-row block-letter HELIOS title from per-letter glyphs."""
+    return "\n".join(" ".join(_HELIOS_GLYPHS[ch][row] for ch in "HELIOS") for row in range(6))
+
+
+HELIOS_ART: str = _build_helios_art()
+
+_GOLD_STYLE = "bold gold1"
+
+
+def build_banner_text(radius: int | None = None, include_tagline: bool = True) -> Text:
+    """Compose the golden Helios logo banner: round sun ball + HELIOS lettering.
+
+    The sun sits on the left with the HELIOS block lettering to its right,
+    vertically centered against the ball. Lines keep their exact widths so
+    the block glyphs stay aligned when wrapped in Align/Panel for display.
+    """
+    if radius is None:
+        radius = 4 if console.width < 100 else 5
+    sun_lines = generate_sun(radius)
+    title_lines = HELIOS_ART.split("\n")
+    sun_width = len(sun_lines[0])
+    title_width = len(title_lines[0])
+    top_pad = max((len(sun_lines) - len(title_lines)) // 2, 0)
+    bottom_pad = max(len(sun_lines) - top_pad - len(title_lines), 0)
+    padded_title: list[str] = [" " * title_width] * top_pad + title_lines + [" " * title_width] * bottom_pad
+
+    banner = Text()
+    for sun_line, title_line in zip(sun_lines, padded_title):
+        row = Text()
+        row.append(sun_line, style=_GOLD_STYLE)
+        row.append("   ", style="")
+        row.append(title_line, style=_GOLD_STYLE)
+        banner.append(row)
+        banner.append("\n", style="")
+    if include_tagline:
+        tagline = "Data Movement Forensics"
+        banner.append("\n", style="")
+        banner.append(tagline.center(sun_width + 3 + title_width), style="bold gold1")
+    return banner
+
+
+def build_banner_panel(radius: int | None = None) -> Panel:
+    """Build the golden Helios logo panel (round sun ball + HELIOS lettering)."""
+    return Panel(
+        Align.center(build_banner_text(radius)),
+        box=box.ROUNDED,
+        border_style="gold1",
+        padding=(0, 4),
+    )
+
+
+def print_banner() -> None:
+    """Print the Helios golden banner (radiating sun + HELIOS lettering)."""
+    console.print(build_banner_panel())
+
+
+# ── Drives ──────────────────────────────────────────────────────────────────
+
+def print_drives_table(drives: list[DriveInfo]) -> None:
+    """Display a table of detected drives/partitions."""
+    table = Table(
+        title="Mounted Drives",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold gold1",
+        border_style="bright_black",
+    )
+    table.add_column("Mount", style="bold")
+    table.add_column("Label")
+    table.add_column("Filesystem")
+    table.add_column("Total Size", justify="right")
+    table.add_column("Free Space", justify="right")
+    table.add_column("Type")
+    table.add_column("Removable", justify="center")
+
+    for d in drives:
+        removable = "[bold green][+] Yes[/]" if d.is_removable else "[dim][-] No[/]"
+        drive_type_str = d.drive_type.value if hasattr(d.drive_type, "value") else str(d.drive_type)
+        table.add_row(
+            d.drive_letter,
+            d.label or "-",
+            d.filesystem or "-",
+            format_size(d.total_size),
+            format_size(d.free_space),
+            drive_type_str,
+            removable,
+        )
+    console.print(table)
+
+
+# ── Devices ─────────────────────────────────────────────────────────────────
+
+def print_devices_table(devices: list[Device]) -> None:
+    """Display a table of detected devices."""
+    table = Table(
+        title="Devices",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold gold1",
+        border_style="bright_black",
+    )
+    table.add_column("Type", style="bold")
+    table.add_column("Name")
+    table.add_column("Serial")
+    table.add_column("Model")
+    table.add_column("OS / Info")
+
+    for dev in devices:
+        dev_type = dev.device_type.value if hasattr(dev.device_type, "value") else str(dev.device_type)
+        table.add_row(
+            dev_type,
+            dev.device_name,
+            dev.serial_number or "-",
+            dev.model or "-",
+            dev.os_version or "-",
+        )
+    console.print(table)
+
+
+# ── Investigation Summary ───────────────────────────────────────────────────
+
+def print_investigation_summary(investigation: Investigation) -> None:
+    """Display an investigation overview panel."""
+    t = Text()
+    t.append("Case:         ", style="bold")
+    t.append(f"{investigation.case_name}\n")
+    t.append("Investigator: ", style="bold")
+    t.append(f"{investigation.investigator}\n")
+    t.append("Created:      ", style="bold")
+    t.append(f"{investigation.created_at.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    t.append("\n")
+    t.append("Devices:      ", style="bold")
+    t.append(f"{len(investigation.devices)}\n")
+    t.append("Drives:       ", style="bold")
+    t.append(f"{len(investigation.drives_scanned)}\n")
+    t.append("Events:       ", style="bold")
+    t.append(f"{len(investigation.events)}\n")
+    t.append("Files:        ", style="bold")
+    t.append(f"{len(investigation.file_records)}\n")
+    t.append("Alerts:       ", style="bold")
+    t.append(f"{len(investigation.alerts)}\n")
+
+    # Count alerts by severity
+    if investigation.alerts:
+        t.append("\n")
+        severity_counts: dict[str, int] = {}
+        for a in investigation.alerts:
+            key = a.severity.value if hasattr(a.severity, "value") else str(a.severity)
+            severity_counts[key] = severity_counts.get(key, 0) + 1
+        for sev_name, count in severity_counts.items():
+            style = "red" if "CRITICAL" in sev_name else "dark_orange" if "HIGH" in sev_name else "yellow"
+            t.append(f"  {sev_name}: ", style=style)
+            t.append(f"{count}\n")
+
+    console.print(
+        Panel(t, title="[bold gold1]Investigation Summary[/]", box=box.ROUNDED, border_style="gold1")
+    )
+
+
+# ── Alerts ──────────────────────────────────────────────────────────────────
+
+def print_alerts(alerts: list[Alert]) -> None:
+    """Display a table of alerts sorted by severity (CRITICAL first)."""
+    severity_order = {Severity.CRITICAL: 0, Severity.HIGH: 1, Severity.MEDIUM: 2, Severity.LOW: 3, Severity.INFO: 4}
+    sorted_alerts = sorted(alerts, key=lambda a: severity_order.get(a.severity, 5))
+
+    table = Table(
+        title="Alerts",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold gold1",
+        border_style="bright_black",
+    )
+    table.add_column("Severity", justify="center")
+    table.add_column("Category")
+    table.add_column("Title")
+    table.add_column("Confidence", justify="center")
+
+    for alert in sorted_alerts:
+        sev_name = alert.severity.value if hasattr(alert.severity, "value") else str(alert.severity)
+        style = SEVERITY_STYLES.get(alert.severity, "white")
+        conf = CONFIDENCE_LABELS.get(alert.confidence, str(alert.confidence))
+        table.add_row(
+            f"[{style}]* {sev_name}[/]",
+            alert.category,
+            alert.title,
+            conf,
+        )
+    console.print(table)
+
+
+def print_alert_detail(alert: Alert) -> None:
+    """Display full details of a single alert."""
+    t = Text()
+    sev_name = alert.severity.value if hasattr(alert.severity, "value") else str(alert.severity)
+    style = SEVERITY_STYLES.get(alert.severity, "white")
+
+    t.append(f"[{style}]* {sev_name}[/]  ", style=style)
+    t.append(alert.title, style="bold")
+    t.append("\n\n")
+    t.append("Category:    ", style="bold")
+    t.append(f"{alert.category}\n")
+    t.append("Confidence:  ", style="bold")
+    conf_name = alert.confidence.value if hasattr(alert.confidence, "value") else str(alert.confidence)
+    t.append(f"{conf_name}\n")
+    if alert.timestamp:
+        t.append("Timestamp:   ", style="bold")
+        t.append(f"{alert.timestamp.strftime('%Y-%m-%d %H:%M:%S')}\n")
+    t.append("\n")
+    t.append("Description:\n", style="bold")
+    t.append(alert.description or "No description provided.")
+
+    console.print(
+        Panel(t, title="[bold]Alert Detail[/]", box=box.ROUNDED, border_style=style.split()[-1])
+    )
+
+
+# ── Event Timeline ──────────────────────────────────────────────────────────
+
+def print_event_timeline(events: list[DataEvent], limit: int = 50) -> None:
+    """Display a chronological event timeline table."""
+    sorted_events = sorted(events, key=lambda e: e.timestamp)
+
+    table = Table(
+        title="Event Timeline",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold gold1",
+        border_style="bright_black",
+    )
+    table.add_column("Timestamp", style="dim")
+    table.add_column("Event", justify="center")
+    table.add_column("Source Path")
+    table.add_column("Destination")
+    table.add_column("Source")
+    table.add_column("Conf", justify="center")
+
+    for event in sorted_events[:limit]:
+        evt_name = event.event_type.value if hasattr(event.event_type, "value") else str(event.event_type)
+        style = EVENT_STYLES.get(event.event_type, "white")
+        conf = CONFIDENCE_LABELS.get(event.confidence, "-")
+
+        table.add_row(
+            event.timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+            f"[{style}]{evt_name}[/]",
+            event.source_path or "-",
+            event.destination_path or "-",
+            event.raw_source or "-",
+            conf,
+        )
+
+    console.print(table)
+    if len(events) > limit:
+        console.print(f"[dim]  ... and {len(events) - limit} more events[/]")
+
+
+# ── File Records ────────────────────────────────────────────────────────────
+
+def print_file_records(records: list[FileRecord], limit: int = 50) -> None:
+    """Display a table of file records."""
+    table = Table(
+        title="File Records",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold gold1",
+        border_style="bright_black",
+    )
+    table.add_column("File Name", style="bold")
+    table.add_column("Path")
+    table.add_column("Size", justify="right")
+    table.add_column("SHA-256", max_width=20)
+    table.add_column("Deleted", justify="center")
+    table.add_column("Recovery", justify="center")
+    table.add_column("Tags")
+
+    for rec in records[:limit]:
+        deleted = "[bold red]YES[/]" if rec.is_deleted else "[dim]no[/]"
+        recovery = rec.recovery_status.value if hasattr(rec.recovery_status, "value") else str(rec.recovery_status)
+        if rec.recovery_status == RecoveryStatus.RECOVERABLE:
+            recovery = f"[green]{recovery}[/]"
+        elif rec.recovery_status == RecoveryStatus.NOT_RECOVERABLE:
+            recovery = f"[red]{recovery}[/]"
+        hash_display = (rec.sha256_hash[:18] + "...") if rec.sha256_hash and len(rec.sha256_hash) > 18 else (rec.sha256_hash or "-")
+        tags = ", ".join(rec.tags) if rec.tags else "-"
+
+        table.add_row(
+            rec.file_name,
+            rec.file_path,
+            format_size(rec.size),
+            hash_display,
+            deleted,
+            recovery,
+            tags,
+        )
+
+    console.print(table)
+    if len(records) > limit:
+        console.print(f"[dim]  ... and {len(records) - limit} more records[/]")
+
+
+# ── Scan Summary ────────────────────────────────────────────────────────────
+
+def print_scan_summary(scan_options: ScanOptions) -> None:
+    """Display what will be scanned."""
+    t = Text()
+    t.append("Profile:     ", style="bold")
+    t.append(f"{scan_options.profile_name}\n")
+    t.append("Drives:      ", style="bold")
+    t.append(f"{', '.join(scan_options.drives) if scan_options.drives else '(all detected)'}\n")
+    t.append("Paths:       ", style="bold")
+    t.append(f"{', '.join(scan_options.paths) if scan_options.paths else '(full drives)'}\n")
+    if scan_options.date_from or scan_options.date_to:
+        t.append("Date Range:  ", style="bold")
+        fr = scan_options.date_from.strftime("%Y-%m-%d") if scan_options.date_from else "-"
+        to = scan_options.date_to.strftime("%Y-%m-%d") if scan_options.date_to else "-"
+        t.append(f"{fr}  ->  {to}\n")
+    if scan_options.file_types:
+        t.append("File Types:  ", style="bold")
+        t.append(f"{', '.join(scan_options.file_types)}\n")
+    if scan_options.keywords:
+        t.append("Keywords:    ", style="bold")
+        t.append(f"{', '.join(scan_options.keywords)}\n")
+    if scan_options.skip_media:
+        t.append("Skip Media:  ", style="bold")
+        t.append("Yes\n")
+
+    console.print(
+        Panel(t, title="[bold gold1]Scan Configuration[/]", box=box.ROUNDED, border_style="gold1")
+    )
+
+
+# ── Utility displays ───────────────────────────────────────────────────────
+
+def print_status(message: str, style: str = "info") -> None:
+    """Print a status message with a colored prefix tag."""
+    icons = {
+        "success": "[bold green][+][/bold green]",
+        "warning": "[bold yellow][!][/bold yellow]",
+        "error": "[bold red][-][/bold red]",
+        "info": "[bold blue][*][/bold blue]",
+        "progress": "[bold cyan][>][/bold cyan]",
+    }
+    console.print(f"{icons.get(style, icons['info'])} {message}")
+
+
+def print_progress_header(title: str) -> None:
+    """Print a section divider with a title."""
+    console.print()
+    console.rule(f"[bold gold1]{title}[/]")
+    console.print()
+
+
+def create_progress() -> Progress:
+    """Create a configured Rich progress bar for Helios."""
+    return Progress(
+        SpinnerColumn(style="gold1"),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(bar_width=40),
+        TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+        TimeElapsedColumn(),
+        console=console,
+    )

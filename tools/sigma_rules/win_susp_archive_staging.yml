@@ -1,0 +1,21 @@
+title: Suspicious Compression of Data Before Exfiltration
+id: a9c5c1c4-1d7a-4c2e-a01a-5f5a8b7d9e08
+status: stable
+description: Detects staging of data into archives, a precursor to data exfiltration.
+references:
+  - https://attack.mitre.org/techniques/T1560/001/
+author: Helios Forensic Engine
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    Image|endswith:
+      - 7z.exe
+      - winrar.exe
+      - rar.exe
+    CommandLine|contains:
+      - a
+      - -r
+  condition: selection
+level: medium
