@@ -106,16 +106,17 @@ class MFTAnalyzer(AnalyzerBase):
 
                         device_id = artifact.device_id or self.name()
 
+                        best_ts: datetime | None = modified_si or modified_fn or created_si or created_fn
+                        if best_ts is None:
+                            continue
+                        timestamp: datetime = best_ts if best_ts.tzinfo is not None else best_ts.replace(tzinfo=timezone.utc)
+
                         if in_use:
                             # Skip event emission for in-use files (covered by live walk)
                             # But still check timestomping and ADS below
                             pass
                         else:
                             # Deleted file — use modified_si as best approximation
-                            del_ts = modified_si or modified_fn or created_si or created_fn
-                            if del_ts is None:
-                                continue
-                            timestamp: datetime = del_ts if del_ts.tzinfo is not None else del_ts.replace(tzinfo=timezone.utc)
                             event = DataEvent(
                                 timestamp=timestamp,
                                 event_type=EventType.FILE_DELETE,

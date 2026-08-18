@@ -163,14 +163,11 @@ def detect_timestomping(
     creation by >60 seconds) or an SI creation time later than its own
     modification time are classic timestomping indicators.
     """
+    if si_modified and si_created and si_modified < si_created:
+        return True
     if not si_created or not fn_created:
         return False
-    # SI creation earlier than FN creation by a wide margin → suspicious
+    # SI creation earlier than FN creation by a wide margin (classic $MFT timestomp)
     if (fn_created - si_created).total_seconds() > 60:
-        # Only flag if SI modification is also suspicious
-        if si_modified and si_modified < si_created:
-            return True
-    # SI creation LATER than SI modification → impossible without tampering
-    if si_modified and si_created and si_modified < si_created:
         return True
     return False

@@ -11,10 +11,11 @@ native variant for the current platform automatically.
 Supported External Forensic Utilities (wired into the live scan pipeline):
 -------------------------------------------------------------------------------
 1. Eric Zimmerman Tools (LNK / JumpList / Prefetch / Recycle Bin /
-   ShellBags parsing)
-     LECmd.exe, JLECmd.exe, SBECmd.exe, PECmd.exe, RBCmd.exe
+   ShellBags / MFT & USN Journal parsing)
+     LECmd.exe, JLECmd.exe, SBECmd.exe, PECmd.exe, RBCmd.exe, MFTECmd.exe
      -> auto-invoked by LnkJumpListAnalyzer, PrefetchAnalyzer,
-        ShellBagsAnalyzer, RecycleBinAnalyzer (via EZToolsAdapter)
+        ShellBagsAnalyzer, RecycleBinAnalyzer, MFTAnalyzer,
+        USNJournalAnalyzer (via EZToolsAdapter / MFTECmdAdapter)
 2. SleuthKit CLI Suite (deleted-file recovery & disk-image enumeration)
      fls.exe, fsstat.exe   (Windows)
      fls, fsstat            (Linux, with linux64/lib)
@@ -32,8 +33,8 @@ Supported External Forensic Utilities (wired into the live scan pipeline):
 
 Bundled Windows build versions (verified x86/x64 PEs):
 -------------------------------------------------------------------------------
-- LECmd, JLECmd, PECmd, SBECmd, RBCmd (Eric Zimmerman Tools,
-  download.ericzimmermanstools.com)
+- LECmd, JLECmd, PECmd, SBECmd, RBCmd, MFTECmd (Eric Zimmerman Tools,
+  download.ericzimmermanstools.com / download.ericzimmerman.ch)
 - chainsaw (WithSecureLabs/chainsaw)
 - exiftool 64-bit with bundled Perl (exiftool.org)
 - adb platform-tools (dl.google.com/android/repository)

@@ -262,7 +262,7 @@ class EventLogsAnalyzer(AnalyzerBase):
         logger.info("Chainsaw Sigma hunts produced %d alerts.", len(alert_dicts))
         return alert_dicts
 
-    def _parse_evtx(self, path: Path) -> list[dict[str, Any]]:
+    def _parse_evtx(self, path: Path, _from_wevtutil: bool = False) -> list[dict[str, Any]]:
         """Parse EVTX records using python-evtx if available.
 
         Extracts the real EventID, SystemTime, logon account and USB device
@@ -274,7 +274,7 @@ class EventLogsAnalyzer(AnalyzerBase):
 
         records = []
         try:
-            import Evtx.Evtx as evtx
+            import Evtx.Evtx as evtx  # type: ignore[import-untyped]
             with evtx.Evtx(str(path)) as log:
                 for record in log.records():
                     try:
@@ -335,4 +335,30 @@ class EventLogsAnalyzer(AnalyzerBase):
             logger.debug("python-evtx not installed; skipping binary EVTX parsing.")
         except Exception as e:
             logger.warning(f"Failed to parse EVTX file {path}: {e}")
+
+        # Fallback: try wevtutil export for locked live event logs
+        if not records and os.name == "nt" and not _from_wevtutil:
+            import subprocess as _sp
+            tmp_path: str | None = None
+            try:
+                with tempfile.NamedTemporaryFile(suffix=".evtx", delete=False) as tmp:
+                    tmp_path = tmp.name
+                result = _sp.run(
+                    ["wevtutil", "epl", str(path), tmp_path],
+                    capture_output=True, timeout=60,
+                )
+                if result.returncode == 0:
+                    records = self._parse_evtx(Path(tmp_path), _from_wevtutil=True)
+                    logger.info("wevtutil fallback parsed %d records from %s", len(records), path)
+                else:
+                    logger.debug("wevtutil epl failed for %s: rc=%d", path, result.returncode)
+            except Exception as wev_e:
+                logger.debug("wevtutil fallback failed for %s: %s", path, wev_e)
+            finally:
+                if tmp_path:
+                    try:
+                        Path(tmp_path).unlink(missing_ok=True)
+                    except Exception:
+                        pass
+
         return records

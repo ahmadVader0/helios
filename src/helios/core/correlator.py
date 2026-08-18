@@ -244,7 +244,7 @@ class CrossDeviceCorrelator:
                 chains.append(chain)
             elif etype_val in ("FILE_COPY", "FILE_MOVE") and (dp or sp):
                 meta = getattr(event, "metadata", {}) or {}
-                dst_dev = getattr(event, "destination_device", None) or meta.get("target_device")
+                dst_dev = meta.get("target_device")
                 src_dev = event.source_device or "Host PC"
                 if not dst_dev:
                     sp_drive = Path(sp).drive if sp else ""

@@ -161,13 +161,10 @@ def test_mft_analyzer_with_csv(tmp_path: Path):
     events = [r for r in results if isinstance(r, DataEvent)]
     alerts = [r for r in results if isinstance(r, Alert)]
 
-    assert len(events) == 2
-    assert events[0].event_type == EventType.FILE_CREATE
-    assert events[0].source_path == "Users\\Admin\\Documents\\normal.docx"
+    assert len(events) == 1
+    assert events[0].event_type == EventType.FILE_DELETE
+    assert events[0].source_path == "Users\\Admin\\Downloads\\stealth.exe:stream"
     assert events[0].source_device == "DEV-USB"
-
-    assert events[1].event_type == EventType.FILE_DELETE
-    assert events[1].source_path == "Users\\Admin\\Downloads\\stealth.exe:stream"
 
     # Row 2 should trigger both Timestomping and ADS alerts
     assert len(alerts) >= 2

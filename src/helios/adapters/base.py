@@ -15,7 +15,7 @@ import sys
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +53,7 @@ def extract_timestamp(line: str) -> datetime | None:
     ts_str = match.group(1)
     try:
         parsed = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
-        return parsed.replace(tzinfo=None)
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
     except ValueError:
         return None
 

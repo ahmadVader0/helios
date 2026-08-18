@@ -20,7 +20,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -162,6 +162,7 @@ def _mft_module(
     drive_devices: dict[str, Device],
     events: list[DataEvent],
     alerts: list,
+    report_dir: Path | None = None,
 ) -> None:
     """Run MFT analysis on NTFS volumes using MFTECmd.
 
@@ -179,7 +180,7 @@ def _mft_module(
         return
 
     analyzer = MFTAnalyzer(config={}, scan_options=scan_options)
-    output_dir = Path.cwd() / "reports" / "mft_output"
+    output_dir = (report_dir or Path.cwd() / "reports") / "mft_output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for drv in target_drives:
@@ -199,7 +200,7 @@ def _mft_module(
                 artifact_type="MFT_CSV",
                 source_path=mft_path,
                 device_id=device_id,
-                collected_at=datetime.now(),
+                collected_at=datetime.now(tz=timezone.utc),
                 raw_data=csv_path,
             )
             results = analyzer.analyze([artifact])
@@ -218,6 +219,7 @@ def _usn_journal_module(
     target_drives: list[DriveInfo],
     drive_devices: dict[str, Device],
     events: list[DataEvent],
+    report_dir: Path | None = None,
 ) -> None:
     """Run USN Journal analysis on NTFS volumes using MFTECmd.
 
@@ -235,7 +237,7 @@ def _usn_journal_module(
         return
 
     analyzer = USNJournalAnalyzer(config={}, scan_options=scan_options)
-    output_dir = Path.cwd() / "reports" / "usn_output"
+    output_dir = (report_dir or Path.cwd() / "reports") / "usn_output"
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for drv in target_drives:
@@ -244,20 +246,22 @@ def _usn_journal_module(
 
         # USN Journal location varies
         usn_path = Path(drv.drive_letter) / "$Extend" / "$UsnJrnl:$J"
+        mft_path = Path(drv.drive_letter) / "$MFT"
         if os.name == "nt":
             usn_path = Path(f"{drv.drive_letter}\\$Extend\\$UsnJrnl:$J")
+            mft_path = Path(f"{drv.drive_letter}\\$MFT")
 
         src_dev = drive_devices.get(drv.drive_letter)
         device_id = src_dev.device_id if src_dev else ""
 
         try:
-            csv_path = adapter.parse_usn_journal(usn_path, output_dir)
+            csv_path = adapter.parse_usn_journal(usn_path, output_dir, mft_file=mft_path)
             artifact = RawArtifact(
                 artifact_id=f"usn-{drv.drive_letter}",
                 artifact_type="USN_CSV",
                 source_path=usn_path,
                 device_id=device_id,
-                collected_at=datetime.now(),
+                collected_at=datetime.now(tz=timezone.utc),
                 raw_data=csv_path,
             )
             results = analyzer.analyze([artifact])
@@ -275,6 +279,7 @@ def _sleuthkit_module(scan_options, target_drives, local_device, file_records: l
     sk = SleuthKitAdapter(config={})
     if not sk.is_available():
         raise RuntimeError("SleuthKit binaries (fls/fsstat) not available")
+    processed = 0
     for drv in target_drives:
         fls_source = _resolve_fls_source(drv, scan_options)
         if not fls_source:
@@ -352,7 +357,11 @@ def _sleuthkit_module(scan_options, target_drives, local_device, file_records: l
                         )
                     )
         file_records.extend(records)
+        processed += 1
         logger.info("SleuthKit recovered %d deleted entries from %s", len(records), fls_source)
+
+    if processed == 0 and target_drives:
+        raise RuntimeError("SleuthKit: raw volume access requires admin/root — all drives skipped")
 
 
 def _suspicious_module(
@@ -714,11 +723,16 @@ def run_investigation_pipeline(
     _run_module("shellbags", "ShellBags Analyzer", events, alerts,
                 lambda: _shellbags_module(scan_options, local_device, events))
 
+    # Resolve report directory early so MFT/USN modules write to the
+    # investigation output directory rather than the process CWD.
+    reports_dir = report_dir or (Path.cwd() / "reports")
+    reports_dir.mkdir(parents=True, exist_ok=True)
+
     # MFT + USN Journal (NTFS deep analysis — requires MFTECmd)
     _run_module("mft_analysis", "MFT Analyzer (MFTECmd)", events, alerts,
-                lambda: _mft_module(scan_options, target_drives, drive_devices, events, alerts))
+                lambda: _mft_module(scan_options, target_drives, drive_devices, events, alerts, report_dir=reports_dir))
     _run_module("usn_journal", "USN Journal Analyzer (MFTECmd)", events, alerts,
-                lambda: _usn_journal_module(scan_options, target_drives, drive_devices, events))
+                lambda: _usn_journal_module(scan_options, target_drives, drive_devices, events, report_dir=reports_dir))
 
     _run_module("deleted_file_recovery", "SleuthKit Deleted-File Recovery", events, alerts,
                 lambda: _sleuthkit_module(scan_options, target_drives, local_device, file_records, events, drive_devices),
@@ -738,6 +752,10 @@ def run_investigation_pipeline(
     if scan_options.date_from or scan_options.date_to:
         d_from = scan_options.date_from
         d_to = scan_options.date_to
+        if d_from and d_from.tzinfo is not None:
+            d_from = d_from.replace(tzinfo=None)
+        if d_to and d_to.tzinfo is not None:
+            d_to = d_to.replace(tzinfo=None)
 
         def _ts_in_range(ts: datetime | None) -> bool:
             if ts is None:
@@ -760,7 +778,7 @@ def run_investigation_pipeline(
         ]
 
     # Populate Chain of Custody entries
-    now = datetime.now()
+    now = datetime.now(tz=timezone.utc)
     ran_modules = [m for m in module_results if m.get("status") == "ran"]
     custody_log = [
         CustodyEntry(
@@ -811,8 +829,6 @@ def run_investigation_pipeline(
     # 11. Profile-specific HTML report
     from helios.reporting.report_generator import ReportGenerator
 
-    reports_dir = report_dir or (Path.cwd() / "reports")
-    reports_dir.mkdir(parents=True, exist_ok=True)
     report_file = reports_dir / f"helios_report_{case_name.replace(' ', '_')}_{profile_name}.html"
 
     generator = ReportGenerator(investigation, config)

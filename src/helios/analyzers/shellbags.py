@@ -111,7 +111,7 @@ class ShellBagsAnalyzer(AnalyzerBase):
                     
                     event = DataEvent(
                         timestamp=ts,
-                        event_type=EventType.APP_EXECUTE,
+                        event_type=EventType.FILE_ACCESS,
                         source_device=artifact.device_id,
                         source_path=str(artifact.source_path),
                         raw_source="ShellBags",

@@ -4,7 +4,7 @@ Helios CLI Entry Point — Supports direct command flags and interactive menu mo
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -239,9 +239,9 @@ def keyword_search_cmd(keywords: str, path: str, output: str | None, title: str 
                         extension=p.suffix.lower(),
                         size=st.st_size,
                         sha256_hash="",
-                        created=datetime.fromtimestamp(st.st_ctime),
-                        modified=datetime.fromtimestamp(st.st_mtime),
-                        accessed=datetime.fromtimestamp(st.st_atime),
+                        created=datetime.fromtimestamp(st.st_ctime, tz=timezone.utc),
+                        modified=datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
+                        accessed=datetime.fromtimestamp(st.st_atime, tz=timezone.utc),
                         source_device=local_device.device_id,
                     )
                 )

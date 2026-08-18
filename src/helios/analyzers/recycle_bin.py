@@ -122,7 +122,10 @@ class RecycleBinAnalyzer(AnalyzerBase):
         for rb_dir in recycle_bin_paths:
             if not rb_dir.exists():
                 continue
-                
+
+            # Derive per-drive device_id from the recycle bin root path
+            drive_device_id: str = rb_dir.drive if os.name == "nt" and rb_dir.drive else device.device_id
+
             try:
                 # Iterate over SID directories
                 for sid_dir in rb_dir.iterdir():
@@ -130,10 +133,10 @@ class RecycleBinAnalyzer(AnalyzerBase):
                         # Collect all $I files
                         for i_file in sid_dir.glob("$I*"):
                             artifact = RawArtifact(
-                                artifact_id=f"recycle_{device.device_id}_{i_file.name}",
+                                artifact_id=f"recycle_{drive_device_id}_{i_file.name}",
                                 artifact_type="recycle_bin_i",
                                 source_path=i_file,
-                                device_id=device.device_id,
+                                device_id=drive_device_id,
                                 collected_at=datetime.now(),
                                 metadata={"sid": sid_dir.name, "size": i_file.stat().st_size}
                             )

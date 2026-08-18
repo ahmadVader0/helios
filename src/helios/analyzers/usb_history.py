@@ -71,14 +71,20 @@ class UsbHistoryAnalyzer(AnalyzerBase):
 
         target_paths = [
             Path("C:\\Windows\\System32\\config\\SYSTEM"),
-            Path("C:\\Windows\\System32\\config\\SOFTWARE"),
             Path("C:\\Windows\\inf\\setupapi.dev.log"),
         ]
+
+        if os.name == "nt":
+            try:
+                for p in Path("C:\\Users").glob("*\\NTUSER.DAT"):
+                    target_paths.append(p)
+            except Exception as e:
+                logger.debug("Failed to glob NTUSER.DAT files: %s", e)
 
         # If paths are provided in scan options, look for registry files there
         if hasattr(self, "scan_options") and self.scan_options and self.scan_options.paths:
             for base_path in self.scan_options.paths:
-                for target in ["SYSTEM", "SOFTWARE", "setupapi.dev.log"]:
+                for target in ["SYSTEM", "setupapi.dev.log"]:
                     p = Path(base_path) / target
                     try:
                         accessible = p.exists() and p.is_file()
@@ -100,14 +106,20 @@ class UsbHistoryAnalyzer(AnalyzerBase):
                 logger.debug("Cannot access %s: %s", path, e)
                 continue
             try:
-                artifact_type = "registry" if path.name in ("SYSTEM", "SOFTWARE") else "log"
+                metadata: dict[str, Any] = {"size": path.stat().st_size}
+                if path.name.lower() == "ntuser.dat":
+                    artifact_type = "ntuser_registry"
+                    metadata["user"] = path.parent.name
+                else:
+                    artifact_type = "registry" if path.name == "SYSTEM" else "log"
+
                 artifact = RawArtifact(
                     artifact_id=f"usb_{device.device_id}_{path.name}",
                     artifact_type=artifact_type,
                     source_path=path,
                     device_id=device.device_id,
                     collected_at=datetime.now(tz=timezone.utc),
-                    metadata={"size": path.stat().st_size},
+                    metadata=metadata,
                 )
                 artifacts.append(artifact)
                 logger.info("Collected USB history artifact: %s", path)
@@ -139,8 +151,8 @@ class UsbHistoryAnalyzer(AnalyzerBase):
                     if not sys_events and os.name == "nt":
                         sys_events = self._parse_live_winreg(artifact.device_id)
                     events.extend(sys_events)
-                elif artifact.source_path.name.lower() == "software":
-                    events.extend(self._parse_software_registry(artifact))
+                elif artifact.source_path.name.lower() == "ntuser.dat":
+                    events.extend(self._parse_ntuser_registry(artifact))
             except Exception as e:
                 logger.error("Error processing USB artifact %s: %s", artifact.source_path, e)
 
@@ -268,9 +280,9 @@ class UsbHistoryAnalyzer(AnalyzerBase):
 
         return events
 
-    def _parse_software_registry(self, artifact: RawArtifact) -> list[DataEvent]:
+    def _parse_ntuser_registry(self, artifact: RawArtifact) -> list[DataEvent]:
         """
-        Parse the SOFTWARE hive's Explorer\\MountPoints2 keys.
+        Parse the NTUSER.DAT hive's Explorer\\MountPoints2 keys.
 
         Each MountPoints2 subkey (volume GUID or drive-letter entry) carries a
         real last-write timestamp from the hive itself — that is the last time
@@ -280,13 +292,13 @@ class UsbHistoryAnalyzer(AnalyzerBase):
         events: list[DataEvent] = []
 
         try:
-            from Registry import Registry  # python-registry
+            from Registry import Registry  # type: ignore[import-untyped]
         except ImportError:
-            logger.debug("python-registry not installed; skipping SOFTWARE hive %s", artifact.source_path)
+            logger.debug("python-registry not installed; skipping NTUSER.DAT hive %s", artifact.source_path)
             return events
 
         mount_points2 = (
-            "Microsoft\\Windows\\CurrentVersion\\Explorer\\MountPoints2"
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\MountPoints2"
         )
         try:
             reg = Registry.Registry(str(artifact.source_path))
@@ -309,7 +321,7 @@ class UsbHistoryAnalyzer(AnalyzerBase):
                     ts = datetime.fromtimestamp(float(last_write), tz=timezone.utc)
                 metadata: dict[str, Any] = {
                     "mountpoint": name,
-                    "source": f"SOFTWARE\\{mount_points2}",
+                    "source": f"NTUSER.DAT\\{mount_points2}",
                 }
                 try:
                     data_val = subkey.value("_Data").value()
@@ -322,7 +334,7 @@ class UsbHistoryAnalyzer(AnalyzerBase):
                     timestamp=ts,
                     event_type=EventType.USB_CONNECT,
                     source_device=artifact.device_id,
-                    source_path="\\".join(["Software", mount_points2]),
+                    source_path="\\".join(["NTUSER.DAT", mount_points2]),
                     confidence=Confidence.MEDIUM,
                     metadata=metadata,
                 ))
@@ -401,7 +413,7 @@ class UsbHistoryAnalyzer(AnalyzerBase):
         events: list[DataEvent] = []
 
         try:
-            from Registry import Registry
+            from Registry import Registry  # type: ignore[import-untyped]
         except ImportError:
             logger.debug("python-registry not installed; skipping SYSTEM hive %s", artifact.source_path)
             return events

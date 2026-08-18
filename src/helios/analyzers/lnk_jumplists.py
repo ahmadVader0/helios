@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 # Enum for drive types commonly found in LNK files
-class DriveType:
+class _LnkDriveType:
     UNKNOWN = "0"
     REMOVABLE = "2"
 
@@ -153,7 +153,7 @@ class LnkJumpListAnalyzer(AnalyzerBase):
             # So we handle text as well.
             is_removable = (
                 "removable" in drive_type_str.lower() or 
-                drive_type_str == DriveType.REMOVABLE
+                drive_type_str == _LnkDriveType.REMOVABLE
             )
             
             creation_time = self._parse_timestamp(rec.get("TargetCreationTime", ""))

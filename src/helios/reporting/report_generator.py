@@ -279,7 +279,7 @@ def build_movement_rows(
 
         meta = getattr(evt, "metadata", {}) or {}
         src_dev_id = getattr(evt, "source_device", "") or "Host PC"
-        dst_dev_id = meta.get("target_device") or getattr(evt, "destination_device", "")
+        dst_dev_id = meta.get("target_device", "")
         if not dst_dev_id:
             sp_drive = Path(src_path).drive if src_path else ""
             dp_drive = Path(dst_path).drive if dst_path else ""
@@ -419,7 +419,7 @@ class ReportGenerator:
                 "hash": str(getattr(fr, "sha256_hash", "") or "")[:16],
                 "source": _display_name(getattr(fr, "source_device", ""), name_map),
                 "source_path": fr_path,
-                "target": "Deleted (SleuthKit)",
+                "target": "Deleted (SleuthKit, deletion time unknown)",
                 "timestamp": ts,
             })
 

@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -585,9 +585,9 @@ def menu_quick_usb_scan(config: HeliosConfig) -> None:
                             extension=p.suffix.lower(),
                             size=st.st_size,
                             sha256_hash=h,
-                            created=datetime.fromtimestamp(st.st_ctime),
-                            modified=datetime.fromtimestamp(st.st_mtime),
-                            accessed=datetime.fromtimestamp(st.st_atime),
+                            created=datetime.fromtimestamp(st.st_ctime, tz=timezone.utc),
+                            modified=datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
+                            accessed=datetime.fromtimestamp(st.st_atime, tz=timezone.utc),
                             source_device=local_device.device_id,
                         )
                         file_records.append(rec)
@@ -829,9 +829,9 @@ def menu_keyword_search(config: HeliosConfig) -> None:
                         extension=p.suffix.lower(),
                         size=st.st_size,
                         sha256_hash="",
-                        created=datetime.fromtimestamp(st.st_ctime),
-                        modified=datetime.fromtimestamp(st.st_mtime),
-                        accessed=datetime.fromtimestamp(st.st_atime),
+                        created=datetime.fromtimestamp(st.st_ctime, tz=timezone.utc),
+                        modified=datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
+                        accessed=datetime.fromtimestamp(st.st_atime, tz=timezone.utc),
                         source_device=local_device.device_id,
                     )
                     file_records.append(rec)

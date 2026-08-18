@@ -9,7 +9,7 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 from helios.models import FileRecord
@@ -100,7 +100,7 @@ class SnapshotEngine:
         snapshot = Snapshot(
             name=name,
             base_path=str(drive_or_path.resolve()),
-            timestamp=datetime.now()
+            timestamp=datetime.now(tz=timezone.utc)
         )
 
         for filepath in drive_or_path.rglob("*"):
@@ -114,9 +114,9 @@ class SnapshotEngine:
                         extension=filepath.suffix.lower(),
                         size=stat.st_size,
                         sha256_hash=file_hash,
-                        created=datetime.fromtimestamp(stat.st_ctime),
-                        modified=datetime.fromtimestamp(stat.st_mtime),
-                        accessed=datetime.fromtimestamp(stat.st_atime),
+                        created=datetime.fromtimestamp(stat.st_ctime, tz=timezone.utc),
+                        modified=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+                        accessed=datetime.fromtimestamp(stat.st_atime, tz=timezone.utc),
                         parent_path=str(filepath.parent)
                     )
                     snapshot.files[str(filepath)] = record

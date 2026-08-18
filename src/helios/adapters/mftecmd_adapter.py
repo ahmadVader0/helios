@@ -12,7 +12,8 @@ class MFTECmdAdapter(ForensicToolAdapter):
     """
     def __init__(self, config: dict | None = None, tool_path: str = "") -> None:
         super().__init__(config, tool_path)
-        self.executable: str | None = str(resolve_tool_binary(self.tool_name(), self.tool_path)) if resolve_tool_binary(self.tool_name(), self.tool_path) else None
+        resolved = resolve_tool_binary(self.tool_name(), self.tool_path)
+        self.executable: str | None = str(resolved) if resolved else None
 
     def tool_name(self) -> str:
         return "MFTECmd"
