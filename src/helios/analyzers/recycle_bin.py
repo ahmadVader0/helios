@@ -123,8 +123,7 @@ class RecycleBinAnalyzer(AnalyzerBase):
             if not rb_dir.exists():
                 continue
 
-            # Derive per-drive device_id from the recycle bin root path
-            drive_device_id: str = rb_dir.drive if os.name == "nt" and rb_dir.drive else device.device_id
+            drive_letter: str = rb_dir.drive if os.name == "nt" and rb_dir.drive else ""
 
             try:
                 # Iterate over SID directories
@@ -133,12 +132,16 @@ class RecycleBinAnalyzer(AnalyzerBase):
                         # Collect all $I files
                         for i_file in sid_dir.glob("$I*"):
                             artifact = RawArtifact(
-                                artifact_id=f"recycle_{drive_device_id}_{i_file.name}",
+                                artifact_id=f"recycle_{device.device_id}_{i_file.name}",
                                 artifact_type="recycle_bin_i",
                                 source_path=i_file,
-                                device_id=drive_device_id,
-                                collected_at=datetime.now(),
-                                metadata={"sid": sid_dir.name, "size": i_file.stat().st_size}
+                                device_id=device.device_id,
+                                collected_at=datetime.now(tz=timezone.utc),
+                                metadata={
+                                    "sid": sid_dir.name,
+                                    "size": i_file.stat().st_size,
+                                    "drive_letter": drive_letter,
+                                }
                             )
                             artifacts.append(artifact)
                             logger.debug("Collected $I file: %s", i_file)
@@ -190,16 +193,14 @@ class RecycleBinAnalyzer(AnalyzerBase):
 
         rb_roots = sorted({Path(artifact.source_path).parent.parent for artifact in artifacts})
         extra_events: list[DataEvent] = []
+        primary_dev_id = artifacts[0].device_id if artifacts else ""
         try:
             with tempfile.TemporaryDirectory() as tmp_dir:
                 csv_dir = Path(tmp_dir)
                 for rb_root in rb_roots:
-                    # Derive device from the recycle bin's drive root
-                    rb_drive = str(rb_root).split(os.sep)[0] if os.name == "nt" else str(rb_root)
-                    rb_device_id = rb_drive if rb_drive else (artifacts[0].device_id if artifacts else "")
                     rows = self.ez_tools.run_rbcmd(rb_root, csv_dir)
                     for row in rows:
-                        event = self._rbcmd_row_to_event(row, rb_device_id)
+                        event = self._rbcmd_row_to_event(row, primary_dev_id)
                         if event is None:
                             continue
                         if str(event.source_path).lower() in seen_names:

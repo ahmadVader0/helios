@@ -167,7 +167,11 @@ class SnapshotEngine:
         a_paths = set(snap_a.files.keys())
         b_paths = set(snap_b.files.keys())
         
-        a_hashes = {v.sha256_hash: k for k, v in snap_a.files.items() if v.sha256_hash}
+        # Group snap_a paths by hash to correctly handle multiple identical files
+        a_hashes: dict[str, list[str]] = {}
+        for k, v in snap_a.files.items():
+            if v.sha256_hash:
+                a_hashes.setdefault(v.sha256_hash, []).append(k)
         
         # Files in B but not A (added or renamed)
         added_paths = b_paths - a_paths
@@ -190,12 +194,13 @@ class SnapshotEngine:
         for added_path in added_paths:
             file_b = snap_b.files[added_path]
             if file_b.sha256_hash and file_b.sha256_hash in a_hashes:
-                original_path = a_hashes[file_b.sha256_hash]
-                if original_path in deleted_paths:
-                    file_a = snap_a.files[original_path]
-                    diff.renamed_files.append((file_a, file_b))
-                    matched_added.add(added_path)
-                    matched_deleted.add(original_path)
+                for candidate_orig in a_hashes[file_b.sha256_hash]:
+                    if candidate_orig in deleted_paths and candidate_orig not in matched_deleted:
+                        file_a = snap_a.files[candidate_orig]
+                        diff.renamed_files.append((file_a, file_b))
+                        matched_added.add(added_path)
+                        matched_deleted.add(candidate_orig)
+                        break
 
         # Remaining un-matched added paths are genuine additions
         for p in (added_paths - matched_added):

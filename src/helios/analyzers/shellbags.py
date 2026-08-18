@@ -13,7 +13,7 @@ from typing import Any
 
 from helios.adapters.ez_tools_adapter import EZToolsAdapter
 from helios.analyzers.base import AnalyzerBase, RawArtifact
-from helios.models import DataEvent, Device, EventType, ScanOptions, Severity
+from helios.models import Alert, Confidence, DataEvent, Device, EventType, ScanOptions, Severity
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +31,7 @@ class ShellBagsAnalyzer(AnalyzerBase):
     ):
         super().__init__(config=config or {}, scan_options=scan_options or ScanOptions())
         self.ez_tools = ez_tools_adapter or EZToolsAdapter(config=self.config)
+        self.alerts: list[Alert] = []
 
     def name(self) -> str:
         """Returns the name of the analyzer."""
@@ -70,7 +71,7 @@ class ShellBagsAnalyzer(AnalyzerBase):
                         artifact_type="RegistryHive",
                         source_path=ntuser,
                         device_id=device.device_id,
-                        collected_at=datetime.now(),
+                        collected_at=datetime.now(tz=timezone.utc),
                         metadata={"user": user_dir.name, "type": "NTUSER.DAT"}
                     ))
                 if usrclass.exists():
@@ -79,7 +80,7 @@ class ShellBagsAnalyzer(AnalyzerBase):
                         artifact_type="RegistryHive",
                         source_path=usrclass,
                         device_id=device.device_id,
-                        collected_at=datetime.now(),
+                        collected_at=datetime.now(tz=timezone.utc),
                         metadata={"user": user_dir.name, "type": "UsrClass.dat"}
                     ))
         
@@ -135,6 +136,16 @@ class ShellBagsAnalyzer(AnalyzerBase):
                             "event_id": event.event_id
                         }
                         event.metadata["alert"] = alert_dict
+                        self.alerts.append(Alert(
+                            severity=Severity.HIGH,
+                            category="Removable Media",
+                            title="Disconnected USB Folder Browsing",
+                            description=f"Folder accessed on a disconnected USB drive: {folder_path}",
+                            evidence=[str(artifact.source_path)],
+                            device=artifact.device_id,
+                            timestamp=ts,
+                            confidence=Confidence.HIGH,
+                        ))
                         logger.warning(f"Suspicious disconnected USB folder access detected: {folder_path}")
 
                     events.append(event)
@@ -153,23 +164,35 @@ class ShellBagsAnalyzer(AnalyzerBase):
             with tempfile.TemporaryDirectory() as tmp_dir:
                 rows = self.ez_tools.run_sbecmd(artifact.source_path, Path(tmp_dir))
             for row in rows:
-                folder_path = str(row.get("FolderPath", "")).strip()
+                folder_path = (
+                    str(row.get("AbsolutePath", "")).strip()
+                    or str(row.get("BagPath", "")).strip()
+                    or str(row.get("FolderPath", "")).strip()
+                    or str(row.get("Value", "")).strip()
+                )
                 if not folder_path:
                     continue
-                # SBECmd emits per-property timestamps; take the first real
-                # value available for each semantic slot.
+                # SBECmd emits per-property timestamps with primary names
+                # AccessedOn, ModifiedOn, CreatedOn, FirstInteracted, LastInteracted,
+                # as well as hex-tagged legacy property columns.
                 last_accessed = self._parse_ez_timestamp(
-                    row.get("LastAccessed0x20")
+                    row.get("AccessedOn")
+                    or row.get("LastAccessed0x20")
+                    or row.get("LastInteracted")
+                    or row.get("ModifiedOn")
                     or row.get("LastModified0x10")
                     or row.get("LastModified0x30")
                 )
                 modification_time = self._parse_ez_timestamp(
-                    row.get("LastModified0x10")
+                    row.get("ModifiedOn")
+                    or row.get("LastModified0x10")
                     or row.get("LastModified0x30")
                     or row.get("LastAccessed0x20")
                 )
                 creation_time = self._parse_ez_timestamp(
-                    row.get("Created0x10")
+                    row.get("CreatedOn")
+                    or row.get("FirstInteracted")
+                    or row.get("Created0x10")
                     or row.get("Created0x30")
                 )
                 entries.append({
@@ -177,7 +200,7 @@ class ShellBagsAnalyzer(AnalyzerBase):
                     "last_accessed": last_accessed,
                     "creation_time": creation_time,
                     "modification_time": modification_time,
-                    "volume": str(row.get("Volume", "")).strip(),
+                    "volume": str(row.get("Volume", "") or row.get("VolumeName", "") or row.get("VolumeGuid", "")).strip(),
                     "tool": "SBECmd",
                 })
         except Exception as e:
@@ -186,12 +209,21 @@ class ShellBagsAnalyzer(AnalyzerBase):
 
     @staticmethod
     def _parse_ez_timestamp(value: object) -> datetime | None:
-        """Parse a 'YYYY-MM-DD HH:MM:SS' timestamp from EZ Tools CSV output."""
+        """Parse timestamp strings from EZ Tools CSV output."""
         if not value:
             return None
+        val_str = str(value).strip()
+        if not val_str or val_str in ("N/A", "None", "-"):
+            return None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%m/%d/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+            try:
+                return datetime.strptime(val_str, fmt).replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
         try:
-            return datetime.strptime(str(value).strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        except ValueError:
+            parsed = datetime.fromisoformat(val_str.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
             return None
         
     def _is_disconnected_usb_path(self, folder_path: str) -> bool:

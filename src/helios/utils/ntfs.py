@@ -153,21 +153,33 @@ def detect_timestomping(
 ) -> bool:
     """Heuristic: detect likely NTFS timestomping.
 
-    NTFS keeps two timestamp sets:
+    NTFS maintains two timestamp sets:
     - ``$STANDARD_INFORMATION`` (SI): user-visible, easily forged by
-      tools like timestomp.exe.
-    - ``$FILE_NAME`` (FN): updated by the filesystem itself on
-      rename/move, much harder to forge.
+      tools like timestomp.exe or SetFileTime.
+    - ``$FILE_NAME`` (FN): updated only by the kernel filesystem driver on
+      file creation, rename or move, much harder to forge from user-mode.
 
     A meaningful SI-earlier-than-FN mismatch (SI creation predates FN
-    creation by >60 seconds) or an SI creation time later than its own
-    modification time are classic timestomping indicators.
+    creation by >60 seconds) or sub-second zeroing on SI while FN retains
+    precision are classic timestomping indicators.
+
+    Note: ``si_modified < si_created`` is normal for standard file copy
+    operations (preserving original mtime while assigning new ctime) and
+    is therefore NOT flagged as timestomping.
     """
-    if si_modified and si_created and si_modified < si_created:
-        return True
     if not si_created or not fn_created:
         return False
-    # SI creation earlier than FN creation by a wide margin (classic $MFT timestomp)
+
+    # 1. SI creation predates FN creation by >60s (classic $MFT timestomp)
     if (fn_created - si_created).total_seconds() > 60:
         return True
+
+    # 2. SI modification predates FN modification by >60s
+    if fn_modified and si_modified and (fn_modified - si_modified).total_seconds() > 60:
+        return True
+
+    # 3. Sub-second zeroing heuristic: SI created has 0 microseconds while FN has non-zero
+    if si_created.microsecond == 0 and fn_created.microsecond != 0 and abs((fn_created - si_created).total_seconds()) > 5:
+        return True
+
     return False

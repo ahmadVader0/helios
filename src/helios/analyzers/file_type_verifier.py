@@ -24,16 +24,22 @@ MAGIC_SIGNATURES: dict[bytes, str] = {
     b"\xff\xd8\xff": ".jpg",
     b"\x47\x49\x46\x38": ".gif",
     b"PK\x03\x04": ".zip",
+    b"7z\xbc\xaf\x27\x1c": ".7z",
     b"Rar!\x1a\x07\x00": ".rar",
     b"Rar!\x1a\x07\x01\x00": ".rar",
     b"\x1f\x8b": ".gz",
     b"\x42\x5a\x68": ".bz2",
-    b"\x7f\x5a\x4c\x53\x70": ".tar",
+    b"\xfd7zXZ\x00": ".xz",
+    b"II*\x00": ".tiff",
+    b"MM\x00*": ".tiff",
 }
 
 # Extensions that are safe to skip in the double/mismatch check because the
 # format is a zip/ole container regardless of the extension used.
 ZIP_BASED_EXTENSIONS: set[str] = {".docx", ".xlsx", ".pptx", ".jar", ".apk", ".zip", ".odt", ".ods", ".odp", ".epub"}
+
+# PE binary extensions that share the MZ header
+PE_EXTENSIONS: set[str] = {".exe", ".dll", ".sys", ".scr", ".cpl", ".ocx", ".efi", ".drv"}
 
 # Files larger than this are skipped by the exiftool deep-verification pass.
 EXIFTOOL_MAX_SIZE_BYTES = 25 * 1024 * 1024
@@ -82,7 +88,7 @@ class FileTypeVerifierAnalyzer(AnalyzerBase):
 
             try:
                 with open(record.file_path, "rb") as f:
-                    header = f.read(16)
+                    header = f.read(512)
             except (PermissionError, FileNotFoundError, OSError) as e:
                 logger.debug("Cannot read file header for %s: %s", record.file_path, e)
                 continue
@@ -93,13 +99,20 @@ class FileTypeVerifierAnalyzer(AnalyzerBase):
                     actual_ext = ext
                     break
 
+            if not actual_ext and len(header) >= 262 and header[257:262] == b"ustar":
+                actual_ext = ".tar"
+
             reported_ext = record.extension.lower() if record.extension else ""
 
             if actual_ext:
                 # Special cases
                 if actual_ext == ".zip" and reported_ext in ZIP_BASED_EXTENSIONS:
                     continue  # These are ZIP-based formats, so it's normal
-                if actual_ext == ".jpg" and reported_ext in [".jpeg"]:
+                if actual_ext == ".exe" and reported_ext in PE_EXTENSIONS:
+                    continue  # Shared MZ executable header
+                if actual_ext == ".jpg" and reported_ext in [".jpeg", ".jpe"]:
+                    continue
+                if actual_ext == ".tiff" and reported_ext in [".tif", ".tiff"]:
                     continue
 
                 if actual_ext != reported_ext and reported_ext != "":

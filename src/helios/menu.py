@@ -218,6 +218,25 @@ def run_main_menu() -> None:
 
 # ── Sub-Menu 1: New Investigation Guided Wizard ─────────────────────────────
 
+def _safe_get_username() -> str:
+    """Safely obtain current username without raising OSError in headless/TTY-less environments."""
+    try:
+        import getpass
+        user = getpass.getuser()
+        if user:
+            return user
+    except Exception:
+        pass
+    try:
+        if hasattr(os, "getlogin"):
+            user = os.getlogin()
+            if user:
+                return user
+    except Exception:
+        pass
+    return os.environ.get("USERNAME") or os.environ.get("USER") or "Lead Analyst"
+
+
 def menu_new_investigation(config: HeliosConfig) -> None:
     """Step-by-step guided wizard for initiating a forensic investigation case."""
     clear_screen()
@@ -244,7 +263,7 @@ def menu_new_investigation(config: HeliosConfig) -> None:
 
     investigator = get_safe_input(
         "Enter Investigator Name",
-        default_value=os.getlogin() if hasattr(os, "getlogin") else "Lead Analyst",
+        default_value=_safe_get_username(),
         help_text="Name of the primary forensic analyst leading the investigation.",
     )
     if investigator.upper() == "B":
@@ -856,7 +875,7 @@ def menu_keyword_search(config: HeliosConfig) -> None:
 
     # Deliverable: dedicated keyword-search HTML report + JSON hit export so
     # the search produces an evidential artifact, not just a terminal table.
-    if matches or True:
+    if matches:
         from helios.reporting.report_generator import ReportGenerator
 
         reports_dir = Path.cwd() / "reports"

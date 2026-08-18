@@ -1,6 +1,7 @@
 import csv
 import logging
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -120,6 +121,7 @@ class EZToolsAdapter(ForensicToolAdapter):
             A list of dictionaries representing the rows in the CSV file.
         """
         logger.debug(f"Executing command: {' '.join(cmd)}")
+        start_time = time.time()
         try:
             # Ensure the output directory exists
             output_csv_dir.mkdir(parents=True, exist_ok=True)
@@ -144,17 +146,26 @@ class EZToolsAdapter(ForensicToolAdapter):
             return []
 
         # Find the CSV file in the output directory
+        # EZ Tools standard output naming format is: <Timestamp>_<Prefix>_Output.csv
+        # or <Prefix>_Output_<Timestamp>.csv. Match both patterns flexibly.
         try:
-            # EZ Tools typically generate a file like: <Prefix>_Output_<Timestamp>.csv
-            csv_files = list(output_csv_dir.glob(f"{expected_csv_prefix}*.csv"))
-            if not csv_files:
-                logger.debug(f"No CSV files found in {output_csv_dir} matching prefix {expected_csv_prefix}")
+            candidates = list(output_csv_dir.glob(f"*{expected_csv_prefix}*.csv"))
+            if not candidates:
+                # Fallback to any CSV generated in the directory
+                candidates = list(output_csv_dir.glob("*.csv"))
+
+            if not candidates:
+                logger.debug(f"No CSV files found in {output_csv_dir} matching {expected_csv_prefix}")
                 return []
-            
+
+            # Filter for CSV files created or modified during this run (with 5s clock skew tolerance)
+            fresh_csvs = [p for p in candidates if p.stat().st_mtime >= start_time - 5.0]
+            target_csvs = fresh_csvs if fresh_csvs else candidates
+
             # Sort by modification time to get the latest one
-            latest_csv = max(csv_files, key=lambda p: p.stat().st_mtime)
+            latest_csv = max(target_csvs, key=lambda p: p.stat().st_mtime)
             return self._parse_csv(latest_csv)
-            
+
         except Exception as e:
             logger.error(f"Error parsing CSV output in {output_csv_dir}: {e}")
             return []

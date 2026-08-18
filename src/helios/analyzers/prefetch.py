@@ -9,12 +9,61 @@ from typing import Any
 
 from helios.adapters.ez_tools_adapter import EZToolsAdapter
 from helios.analyzers.base import AnalyzerBase, RawArtifact
-from helios.models import DataEvent, Device, EventType, ScanOptions, Severity
+from helios.adapters.ez_tools_adapter import EZToolsAdapter
+from helios.analyzers.base import AnalyzerBase, RawArtifact
+from helios.models import Alert, Confidence, DataEvent, Device, EventType, ScanOptions, Severity
 
 logger = logging.getLogger(__name__)
 
 # FILETIME epoch: 1601-01-01 expressed as 100ns intervals between 1601 and 1970
 FILETIME_UNIX_OFFSET_US = 116444736000000000
+
+
+def _decompress_mam(data: bytes) -> bytes | None:
+    """Decompress Windows 10/11 MAM\\x04 (XPRESS Huffman) compressed prefetch data."""
+    if len(data) < 8 or data[:4] != b"MAM\x04":
+        return None
+    try:
+        uncompressed_size = struct.unpack("<I", data[4:8])[0]
+        if uncompressed_size <= 0 or uncompressed_size > 50 * 1024 * 1024:
+            return None
+
+        # 1. Native Windows ntdll decompression (fastest and standard)
+        if os.name == "nt":
+            try:
+                import ctypes
+                ntdll = ctypes.windll.ntdll  # type: ignore[attr-defined]
+                out_buf = ctypes.create_string_buffer(uncompressed_size)
+                final_size = ctypes.c_ulong(0)
+                # COMPRESSION_FORMAT_XPRESS_HUFF = 4
+                status = ntdll.RtlDecompressBuffer(
+                    4,
+                    out_buf,
+                    uncompressed_size,
+                    data[8:],
+                    len(data) - 8,
+                    ctypes.byref(final_size),
+                )
+                if status == 0:
+                    return out_buf.raw[:final_size.value]
+                # Format 3 = XPRESS, Format 2 = LZNT1
+                for fmt in (3, 2):
+                    status = ntdll.RtlDecompressBuffer(
+                        fmt,
+                        out_buf,
+                        uncompressed_size,
+                        data[8:],
+                        len(data) - 8,
+                        ctypes.byref(final_size),
+                    )
+                    if status == 0:
+                        return out_buf.raw[:final_size.value]
+            except Exception as e:
+                logger.debug("ntdll prefetch decompression failed: %s", e)
+    except Exception as e:
+        logger.debug("MAM decompression failed: %s", e)
+    return None
+
 
 class PrefetchAnalyzer(AnalyzerBase):
     """
@@ -37,6 +86,7 @@ class PrefetchAnalyzer(AnalyzerBase):
     ):
         super().__init__(config=config or {}, scan_options=scan_options or ScanOptions())
         self.ez_tools = ez_tools_adapter or EZToolsAdapter(config=self.config)
+        self.alerts: list[Alert] = []
 
     def name(self) -> str:
         """Returns the name of the analyzer."""
@@ -71,16 +121,19 @@ class PrefetchAnalyzer(AnalyzerBase):
         if prefetch_dir.exists() and prefetch_dir.is_dir():
             # Match *.pf case-insensitively (Linux filesystems are case-sensitive
             # and real Windows prefetch files can be created as UPPER.PF).
-            pf_files = [p for p in prefetch_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pf"]
-            for pf_file in pf_files:
+            try:
+                pf_files = [p for p in prefetch_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pf"]
+                for pf_file in pf_files:
                     artifacts.append(RawArtifact(
                         artifact_id=str(uuid.uuid4()),
                         artifact_type="PrefetchFile",
                         source_path=pf_file,
                         device_id=device.device_id,
-                        collected_at=datetime.now(),
+                        collected_at=datetime.now(tz=timezone.utc),
                         metadata={"filename": pf_file.name}
                     ))
+            except OSError as e:
+                logger.debug("Cannot read Prefetch directory %s: %s", prefetch_dir, e)
         return artifacts
 
     def analyze(self, artifacts: list[RawArtifact]) -> list[DataEvent]:
@@ -142,6 +195,16 @@ class PrefetchAnalyzer(AnalyzerBase):
                 alert_dict = self._detect_suspicious_tools(executable_name, event)
                 if alert_dict:
                     event.metadata["alert"] = alert_dict
+                    self.alerts.append(Alert(
+                        severity=Severity.CRITICAL if alert_dict.get("severity") == Severity.CRITICAL.value else Severity.HIGH,
+                        category="Suspicious Execution",
+                        title=alert_dict.get("title", "Suspicious Execution"),
+                        description=alert_dict.get("description", f"Suspicious tool executed: {executable_name}"),
+                        evidence=[str(artifact.source_path)],
+                        device=artifact.device_id,
+                        timestamp=primary_ts,
+                        confidence=Confidence.HIGH,
+                    ))
                     logger.warning(f"Suspicious execution detected: {executable_name}")
                 
                 events.append(event)
@@ -195,15 +258,15 @@ class PrefetchAnalyzer(AnalyzerBase):
 
     def _parse_prefetch(self, pf_path: str) -> dict[str, Any] | None:
         """
-        Parse a Windows 10/11 Prefetch binary (format versions 30/31) to
-        extract execution timestamps and run counts.
+        Parse a Windows Prefetch binary (format versions 17/23/26/30/31, compressed or uncompressed)
+        to extract execution timestamps, executable names, and run counts.
 
         Args:
             pf_path: Path to the Prefetch file.
 
         Returns:
             Dictionary with executable name, run count and timestamps, or
-            None when the file cannot be parsed or contains no timestamps.
+            None when the file cannot be parsed.
         """
         try:
             with open(pf_path, "rb") as f:
@@ -212,65 +275,95 @@ class PrefetchAnalyzer(AnalyzerBase):
             logger.error("Cannot read prefetch file %s: %s", pf_path, e)
             return None
 
-        if len(data) < 84 or data[:4] != b"MAM\x04":
-            logger.debug("Not a valid prefetch file: %s", pf_path)
+        if len(data) < 8:
+            logger.debug("Prefetch file too small: %s", pf_path)
             return None
 
-        version = struct.unpack("<I", data[4:8])[0]
-        file_info_offset = struct.unpack("<I", data[16:20])[0]
-        file_info_count = struct.unpack("<I", data[20:24])[0]
-
-        if file_info_offset <= 0 or file_info_count == 0:
-            logger.debug("No file info entries in prefetch: %s", pf_path)
-            return None
-
-        # File info entries: 200 bytes (v30) or 224 bytes (v31)
-        entry_size = 224 if version >= 31 else 200
-        metrics_offsets: list[int] = []
-        for i in range(file_info_count):
-            entry_off = file_info_offset + i * entry_size
-            if entry_off + 0x50 > len(data):
-                break
-            metrics_off = struct.unpack("<I", data[entry_off + 0x40:entry_off + 0x44])[0]
-            metrics_count = struct.unpack("<I", data[entry_off + 0x44:entry_off + 0x48])[0]
-            if metrics_off <= 0:
-                continue
-            # Metrics array entries are 132 bytes for v30/v31
-            for m in range(metrics_count):
-                metrics_offsets.append(metrics_off + m * 132)
+        # Handle Windows 10/11 MAM\x04 compressed prefetch format
+        if data[:4] == b"MAM\x04":
+            decomp = _decompress_mam(data)
+            if decomp is not None:
+                data = decomp
 
         timestamps: list[datetime] = []
         run_count = 0
-        for m_off in metrics_offsets:
-            if m_off + 8 > len(data):
-                continue
-            filetime = struct.unpack("<Q", data[m_off:m_off + 8])[0]
-            if filetime == 0:
-                continue
-            unix_us = (filetime - FILETIME_UNIX_OFFSET_US) / 10.0
-            try:
-                timestamps.append(datetime.fromtimestamp(unix_us / 1_000_000, tz=timezone.utc))
-            except (ValueError, OverflowError, OSError):
-                continue
-            if m_off + 0x70 <= len(data):
+        exec_name = ""
+
+        # Check for SCCA signature (either at offset 4 or offset 0)
+        version: int | None = None
+        scca_found = False
+        if len(data) >= 8 and data[4:8] == b"SCCA":
+            version = struct.unpack("<I", data[:4])[0]
+            scca_found = True
+        elif len(data) >= 4 and data[:4] == b"SCCA":
+            scca_found = True
+            version = 30
+
+        if scca_found and version is not None:
+            # Executable name starts at offset 16 (UTF-16LE, up to 30 characters / 60 bytes)
+            if len(data) >= 76:
                 try:
-                    run_count = max(run_count, struct.unpack("<I", data[m_off + 0x6C:m_off + 0x70])[0])
-                except struct.error:
+                    raw_name = data[16:76].decode("utf-16le", errors="ignore").split("\x00")[0].strip()
+                    if raw_name:
+                        exec_name = raw_name
+                except Exception:
                     pass
+
+            if version in (17, 23):  # Windows XP, 2003, Vista, 7
+                if len(data) >= 88:
+                    last_run_ft = struct.unpack("<Q", data[80:88])[0]
+                    if last_run_ft > 0:
+                        unix_us = (last_run_ft - FILETIME_UNIX_OFFSET_US) / 10.0
+                        try:
+                            timestamps.append(datetime.fromtimestamp(unix_us / 1_000_000, tz=timezone.utc))
+                        except (ValueError, OverflowError, OSError):
+                            pass
+                    try:
+                        run_count = struct.unpack("<I", data[84:88])[0]
+                    except struct.error:
+                        run_count = 1
+
+            elif version in (26, 30, 31):  # Windows 8, 8.1, 10, 11
+                # Up to 8 execution timestamps array at offset 128 (0x80)
+                if len(data) >= 128 + 64:
+                    for idx in range(8):
+                        off = 128 + (idx * 8)
+                        ft = struct.unpack("<Q", data[off:off + 8])[0]
+                        if ft > 0:
+                            unix_us = (ft - FILETIME_UNIX_OFFSET_US) / 10.0
+                            try:
+                                timestamps.append(datetime.fromtimestamp(unix_us / 1_000_000, tz=timezone.utc))
+                            except (ValueError, OverflowError, OSError):
+                                pass
+                rc_offset = 208 if version >= 30 else 196
+                if len(data) >= rc_offset + 4:
+                    try:
+                        run_count = struct.unpack("<I", data[rc_offset:rc_offset + 4])[0]
+                    except struct.error:
+                        pass
+
+        # Fallback to filename-based inference if header could not be fully parsed
+        if not exec_name:
+            filename = Path(pf_path).name
+            stem = filename.split('-')[0] if '-' in filename else filename
+            exec_name = stem if stem.lower().endswith(".exe") else f"{stem}.exe"
+
+        if not timestamps:
+            # Best-effort file modification time fallback
+            try:
+                mtime = Path(pf_path).stat().st_mtime
+                if mtime > 0:
+                    timestamps.append(datetime.fromtimestamp(mtime, tz=timezone.utc))
+            except OSError:
+                pass
 
         if not timestamps:
             logger.debug("No execution timestamps in prefetch %s; skipping", pf_path)
             return None
 
-        filename = Path(pf_path).name
-        stem = filename.split('-')[0] if '-' in filename else filename
-        # Prefetch files look like NOTEPAD.EXE-5F1A0B32.pf; the executable
-        # name is the part before the hash. Never append a duplicate ".exe".
-        exec_name = stem if stem.lower().endswith(".exe") else f"{stem}.exe"
-
         return {
             "executable_name": exec_name,
-            "run_count": run_count or 1,
+            "run_count": max(run_count or 1, 1),
             "execution_timestamps": sorted(set(timestamps)),
             "referenced_files": [],
             "referenced_directories": []

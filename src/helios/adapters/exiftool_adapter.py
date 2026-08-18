@@ -84,6 +84,13 @@ class ExifToolAdapter(ForensicToolAdapter):
         if not existing or not self.is_available():
             return results
 
+        path_map: dict[str, str] = {}
+        for p in file_paths:
+            try:
+                path_map[str(p.resolve())] = str(p)
+            except Exception:
+                path_map[str(p)] = str(p)
+
         # Keep each command line comfortably below Windows' 32K limit:
         # 300 paths per batch is safe even with long UNC/WSL paths.
         batch_size = 300
@@ -110,8 +117,17 @@ class ExifToolAdapter(ForensicToolAdapter):
                     k: v for k, v in entry.items()
                     if k not in ("SourceFile", "FileTypeExtension", "FileType") and v
                 }
-                results[str(src)] = (
+                type_tuple: tuple[str | None, dict[str, Any]] = (
                     str(ext).lower().lstrip(".") or None,
                     metadata,
                 )
+                try:
+                    resolved_src = str(Path(src).resolve())
+                except Exception:
+                    resolved_src = str(src)
+
+                original_key = path_map.get(resolved_src, str(src))
+                results[original_key] = type_tuple
+                results[str(src)] = type_tuple
+                results[resolved_src] = type_tuple
         return results

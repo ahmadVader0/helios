@@ -156,7 +156,20 @@ class UsbHistoryAnalyzer(AnalyzerBase):
             except Exception as e:
                 logger.error("Error processing USB artifact %s: %s", artifact.source_path, e)
 
-        return events
+        # Deduplicate events across live winreg, offline hives, and logs
+        seen_events: set[tuple[str, str, str]] = set()
+        deduped_events: list[DataEvent] = []
+        for evt in events:
+            key = (
+                str(evt.event_type),
+                str(evt.metadata.get("serial_number") or evt.metadata.get("hardware_id") or evt.source_path),
+                evt.timestamp.isoformat() if evt.timestamp else "",
+            )
+            if key not in seen_events:
+                seen_events.add(key)
+                deduped_events.append(evt)
+
+        return deduped_events
 
     def _parse_live_winreg(self, device_id: str) -> list[DataEvent]:
         """
@@ -193,13 +206,20 @@ class UsbHistoryAnalyzer(AnalyzerBase):
                                     except OSError:
                                         pass
 
-                                    # Try ContainerID\InstallTime
+                                    # ContainerID is a REG_SZ value under the device instance key
                                     try:
-                                        with winreg.OpenKey(inst_k, "ContainerID") as cont_k:
-                                            container_id = winreg.EnumKey(cont_k, 0) if winreg.QueryInfoKey(cont_k)[0] > 0 else ""
-                                            install_ft, _ = winreg.QueryValueEx(cont_k, "InstallTime")
-                                            if isinstance(install_ft, int) and install_ft > 0:
-                                                unix_us = (install_ft - 116444736000000000) / 10.0
+                                        cont_val, _ = winreg.QueryValueEx(inst_k, "ContainerID")
+                                        if cont_val:
+                                            container_id = str(cont_val)
+                                    except OSError:
+                                        pass
+
+                                    # Try Properties subkey for InstallTime / FirstInstallDate
+                                    try:
+                                        with winreg.OpenKey(inst_k, "Properties\\{83da6326-97a6-4088-9453-a1923f573b29}\\0000000000000064") as prop_k:
+                                            prop_ft, _ = winreg.QueryValueEx(prop_k, "")
+                                            if isinstance(prop_ft, int) and prop_ft > 0:
+                                                unix_us = (prop_ft - 116444736000000000) / 10.0
                                                 connect_time = datetime.fromtimestamp(unix_us / 1_000_000, tz=timezone.utc)
                                     except OSError:
                                         pass

@@ -69,36 +69,39 @@ class EventLogsAnalyzer(AnalyzerBase):
             root = Path("/")
         winevt_dir = root / "Windows" / "System32" / "Winevt" / "Logs"
 
-        target_logs = [
-            "Security.evtx",
-            "System.evtx",
-            "Software.evtx",
-            "Microsoft-Windows-Partition%4Diagnostic.evtx"
-        ]
+        target_logs = {
+            "security.evtx",
+            "system.evtx",
+            "software.evtx",
+            "microsoft-windows-partition%4diagnostic.evtx",
+            "microsoft-windows-partition/diagnostic.evtx",
+        }
 
         if winevt_dir.exists() and winevt_dir.is_dir():
-            for log_name in target_logs:
-                log_file = winevt_dir / log_name
-                if log_file.exists():
+            for log_file in winevt_dir.iterdir():
+                if log_file.is_file() and log_file.name.lower() in target_logs:
                     artifacts.append(RawArtifact(
                         artifact_id=str(uuid.uuid4()),
                         artifact_type="evtx",
                         source_path=log_file,
                         device_id=device.device_id,
-                        collected_at=datetime.now()
+                        collected_at=datetime.now(tz=timezone.utc),
                     ))
                     logger.info(f"Collected event log: {log_file}")
-        elif root.exists():
-            for evtx_file in root.rglob("*.evtx"):
-                if evtx_file.name in target_logs:
-                    artifacts.append(RawArtifact(
-                        artifact_id=str(uuid.uuid4()),
-                        artifact_type="evtx",
-                        source_path=evtx_file,
-                        device_id=device.device_id,
-                        collected_at=datetime.now()
-                    ))
-                    logger.info(f"Collected exported event log: {evtx_file}")
+        elif root.exists() and root != Path("/"):
+            try:
+                for evtx_file in root.glob("*.evtx"):
+                    if evtx_file.name.lower() in target_logs:
+                        artifacts.append(RawArtifact(
+                            artifact_id=str(uuid.uuid4()),
+                            artifact_type="evtx",
+                            source_path=evtx_file,
+                            device_id=device.device_id,
+                            collected_at=datetime.now(tz=timezone.utc),
+                        ))
+                        logger.info(f"Collected exported event log: {evtx_file}")
+            except OSError as e:
+                logger.debug("Cannot glob EVTX files from %s: %s", root, e)
 
         return artifacts
 
@@ -106,12 +109,12 @@ class EventLogsAnalyzer(AnalyzerBase):
         """Parse EVTX records into timeline events and structured alerts."""
         events: list[DataEvent] = []
         alerts: list[Alert] = []
+        failed_logons_by_account: dict[str, list[datetime]] = {}
 
         for artifact in artifacts:
             try:
-                parsed_records = self._parse_evtx(artifact.source_path)
-
-                for record in parsed_records:
+                records = self._parse_evtx(artifact.source_path)
+                for record in records:
                     event_id = record.get("event_id")
                     ts = record.get("timestamp")
                     if ts is None:
@@ -119,25 +122,21 @@ class EventLogsAnalyzer(AnalyzerBase):
 
                     if event_id in (4624, 4625):
                         account = record.get("account") or "Unknown"
+                        is_failed = event_id == 4625
                         events.append(DataEvent(
                             timestamp=ts,
-                            event_type=EventType.APP_EXECUTE,
+                            event_type=EventType.FILE_ACCESS,
                             source_device=artifact.device_id,
                             source_path=str(artifact.source_path),
                             raw_source="EVTX",
-                            metadata={"event_id": event_id, "account": account},
+                            metadata={
+                                "event_id": event_id,
+                                "account": account,
+                                "status": "Failed" if is_failed else "Success",
+                            },
                         ))
-                        if event_id == 4625:
-                            alerts.append(Alert(
-                                severity=Severity.MEDIUM,
-                                category="Event Log Anomaly",
-                                title="Failed Logon Attempt",
-                                description=f"Failed logon for account '{account}' (EventID 4625).",
-                                evidence=[str(artifact.source_path)],
-                                device=artifact.device_id,
-                                timestamp=ts,
-                                confidence=Confidence.MEDIUM,
-                            ))
+                        if is_failed and account != "Unknown":
+                            failed_logons_by_account.setdefault(account, []).append(ts)
 
                     elif event_id in (20001, 20003):
                         device_id = record.get("device") or "Unknown USB device"
@@ -222,7 +221,9 @@ class EventLogsAnalyzer(AnalyzerBase):
         try:
             from helios.config import get_bundle_root
 
-            sigma_rules_dir = get_bundle_root() / "sigma_rules"
+            sigma_rules_dir = get_bundle_root() / "tools" / "sigma_rules"
+            if not sigma_rules_dir.is_dir():
+                sigma_rules_dir = get_bundle_root() / "sigma_rules"
         except Exception as e:
             logger.debug("Cannot resolve bundled Sigma rules directory: %s", e)
             return []
@@ -263,18 +264,21 @@ class EventLogsAnalyzer(AnalyzerBase):
         return alert_dicts
 
     def _parse_evtx(self, path: Path, _from_wevtutil: bool = False) -> list[dict[str, Any]]:
-        """Parse EVTX records using python-evtx if available.
-
-        Extracts the real EventID, SystemTime, logon account and USB device
-        name from each record's XML; records without a parseable timestamp
-        are skipped rather than assigned a fabricated one.
         """
-        import xml.etree.ElementTree as ET
-        ns = {"e": "http://schemas.microsoft.com/win/2004/08/events/event"}
+        Parse binary EVTX file and extract SystemTime, EventID, and key payload data.
+        Returns a list of record dicts.
+        """
+        records: list[dict[str, Any]] = []
 
-        records = []
+        if not path.exists():
+            return records
+
         try:
             import Evtx.Evtx as evtx  # type: ignore[import-untyped]
+            import xml.etree.ElementTree as ET
+
+            ns = {"e": "http://schemas.microsoft.com/win/2004/08/events/event"}
+
             with evtx.Evtx(str(path)) as log:
                 for record in log.records():
                     try:
@@ -282,6 +286,7 @@ class EventLogsAnalyzer(AnalyzerBase):
                         if not xml_string:
                             continue
                         root = ET.fromstring(xml_string)
+
                         system = root.find(".//e:System", ns)
                         if system is None:
                             continue
@@ -313,14 +318,13 @@ class EventLogsAnalyzer(AnalyzerBase):
                             "timestamp": timestamp,
                         }
 
-                        # Logon account (EventData/SubjectUserName)
+                        # Extract accounts and devices if available
                         for tag in ("SubjectUserName", "TargetUserName"):
                             el = root.find(f".//e:EventData/e:Data[@Name='{tag}']", ns)
                             if el is not None and el.text:
                                 record_dict["account"] = el.text.strip()
                                 break
 
-                        # USB device name (EventData/DeviceDescription or InstanceId)
                         for tag in ("DeviceDescription", "InstanceId", "DeviceName"):
                             el = root.find(f".//e:EventData/e:Data[@Name='{tag}']", ns)
                             if el is not None and el.text:
@@ -343,10 +347,20 @@ class EventLogsAnalyzer(AnalyzerBase):
             try:
                 with tempfile.NamedTemporaryFile(suffix=".evtx", delete=False) as tmp:
                     tmp_path = tmp.name
+
+                # Try channel name export first (e.g. Security, System)
+                channel_name = path.stem
                 result = _sp.run(
-                    ["wevtutil", "epl", str(path), tmp_path],
+                    ["wevtutil", "epl", channel_name, tmp_path, "/ow:true"],
                     capture_output=True, timeout=60,
                 )
+                if result.returncode != 0:
+                    # Fallback to direct file path export with /lf:true
+                    result = _sp.run(
+                        ["wevtutil", "epl", str(path), tmp_path, "/lf:true", "/ow:true"],
+                        capture_output=True, timeout=60,
+                    )
+
                 if result.returncode == 0:
                     records = self._parse_evtx(Path(tmp_path), _from_wevtutil=True)
                     logger.info("wevtutil fallback parsed %d records from %s", len(records), path)

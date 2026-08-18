@@ -141,25 +141,28 @@ def detect_drives() -> list[DriveInfo]:
 
                     vol_name = ctypes.create_unicode_buffer(261)
                     fs_name = ctypes.create_unicode_buffer(261)
+                    vol_serial = ctypes.c_ulong(0)
                     ctypes.windll.kernel32.GetVolumeInformationW(
                         drive_root,
                         vol_name,
                         261,
-                        None,
+                        ctypes.byref(vol_serial),
                         None,
                         None,
                         fs_name,
                         261
                     )
+                    serial_hex = f"{vol_serial.value:08X}" if vol_serial.value else ""
 
                     drives.append(DriveInfo(
                         drive_letter=drive_letter,
                         label=vol_name.value or "",
                         filesystem=fs_name.value or "NTFS",
                         total_size=total.value,
-                        free_space=free_user.value,
+                        free_space=free_total.value or free_user.value,
                         drive_type=d_type,
                         is_removable=is_removable,
+                        device_serial=serial_hex,
                     ))
         except Exception:
             pass

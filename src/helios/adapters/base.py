@@ -202,16 +202,43 @@ def resolve_tool_binary(binary_name: str, explicit_path: str | None = None) -> P
         search_dirs.append(Path(sys._MEIPASS) / "tools")
         search_dirs.append(Path(sys._MEIPASS))
 
-    # 2. Executable parent directory
+    # 2. Bundle root / Package-anchored tools directory
+    try:
+        from helios.config import get_bundle_root
+        b_root = get_bundle_root()
+        search_dirs.append(b_root / "tools")
+        search_dirs.append(b_root)
+    except Exception:
+        pass
+
+    pkg_root = Path(__file__).resolve().parent.parent.parent.parent
+    search_dirs.append(pkg_root / "tools")
+    search_dirs.append(pkg_root)
+
+    # 3. Executable parent directory
     if getattr(sys, "executable", None):
         search_dirs.append(Path(sys.executable).parent / "tools")
         search_dirs.append(Path(sys.executable).parent)
 
-    # 3. Current Working Directory
+    # 4. Current Working Directory
     search_dirs.append(Path.cwd() / "tools")
     search_dirs.append(Path.cwd())
 
+    # Deduplicate search directories while preserving search order
+    seen_dirs: set[Path] = set()
+    deduped_search_dirs: list[Path] = []
     for d in search_dirs:
+        try:
+            resolved_d = d.resolve()
+            if resolved_d not in seen_dirs:
+                seen_dirs.add(resolved_d)
+                deduped_search_dirs.append(d)
+        except Exception:
+            if d not in seen_dirs:
+                seen_dirs.add(d)
+                deduped_search_dirs.append(d)
+
+    for d in deduped_search_dirs:
         for name in names:
             candidate = d / name
             if candidate.exists() and candidate.is_file():
@@ -225,7 +252,7 @@ def resolve_tool_binary(binary_name: str, explicit_path: str | None = None) -> P
                     continue
                 return candidate.resolve()
 
-    # 4. System PATH lookup
+    # 5. System PATH lookup
     for name in names:
         found = shutil.which(name)
         if found and _is_platform_compatible(Path(found), on_windows=os.name == "nt"):

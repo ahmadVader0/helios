@@ -463,7 +463,7 @@ class ReportGenerator:
         _SHELLBAGS_SOURCES = ("SBECmd", "ShellBags")
         shellbags_rows = [r for r in all_event_rows if r["raw_source"] in _SHELLBAGS_SOURCES]
 
-        _EVTX_SOURCES = ("python-evtx", "Chainsaw", "Event Logs", "Security.evtx", "System.evtx")
+        _EVTX_SOURCES = ("python-evtx", "Chainsaw", "Event Logs", "EVTX", "evtx", "Security.evtx", "System.evtx")
         event_log_rows = [r for r in all_event_rows if r["raw_source"] in _EVTX_SOURCES or r["type"] == "EVENT_LOG"]
 
         _USB_TYPES = ("USB_CONNECT", "USB_DISCONNECT", "DEVICE_CONNECT")

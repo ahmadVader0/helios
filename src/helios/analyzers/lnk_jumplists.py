@@ -100,14 +100,22 @@ class LnkJumpListAnalyzer(AnalyzerBase):
             return [Path(user_prof).name]
         return []
 
-    def _parse_timestamp(self, ts_str: str) -> datetime | None:
+    def _parse_timestamp(self, ts_str: Any) -> datetime | None:
         """Parse timestamp strings from EZ Tools output."""
-        if not ts_str or ts_str.strip() == "":
+        if not ts_str:
             return None
+        val_str = str(ts_str).strip()
+        if not val_str or val_str in ("N/A", "None", "-"):
+            return None
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%m/%d/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+            try:
+                return datetime.strptime(val_str, fmt).replace(tzinfo=timezone.utc)
+            except ValueError:
+                pass
         try:
-            # Typical EZ tool timestamp: 2020-01-01 12:34:56
-            return datetime.strptime(ts_str.strip(), "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
-        except ValueError:
+            parsed = datetime.fromisoformat(val_str.replace("Z", "+00:00"))
+            return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
             return None
 
     def analyze(self, artifacts: list[RawArtifact]) -> list[DataEvent]:
@@ -150,20 +158,33 @@ class LnkJumpListAnalyzer(AnalyzerBase):
             drive_type_str = str(rec.get("DriveType", ""))
             
             # Map known drive types to our constants if needed, LECmd outputs text usually like "Removable" or "Fixed"
-            # So we handle text as well.
             is_removable = (
                 "removable" in drive_type_str.lower() or 
                 drive_type_str == _LnkDriveType.REMOVABLE
             )
             
-            creation_time = self._parse_timestamp(rec.get("TargetCreationTime", ""))
-            modification_time = self._parse_timestamp(rec.get("TargetModificationTime", ""))
-            access_time = self._parse_timestamp(rec.get("TargetAccessTime", ""))
+            creation_time = self._parse_timestamp(
+                rec.get("TargetCreated")
+                or rec.get("TargetCreationTime")
+                or rec.get("SourceCreated")
+            )
+            modification_time = self._parse_timestamp(
+                rec.get("TargetModified")
+                or rec.get("TargetModificationTime")
+                or rec.get("SourceModified")
+            )
+            access_time = self._parse_timestamp(
+                rec.get("TargetAccessed")
+                or rec.get("TargetAccessTime")
+                or rec.get("SourceAccessed")
+            )
             
             # LNK creation time itself usually denotes first time the file was accessed via shortcut
-            lnk_creation = self._parse_timestamp(rec.get("SourceCreated", ""))
+            lnk_creation = self._parse_timestamp(
+                rec.get("SourceCreated") or rec.get("SourceCreationTime")
+            )
             
-            timestamp = access_time or lnk_creation
+            timestamp = access_time or lnk_creation or modification_time or creation_time
             if timestamp is None:
                 logger.debug("No timestamp in LECmd record; skipping %s", rec.get("SourceFile", ""))
                 continue
@@ -204,7 +225,15 @@ class LnkJumpListAnalyzer(AnalyzerBase):
             
             is_removable = "removable" in drive_type_str.lower()
             
-            access_time = self._parse_timestamp(rec.get("TargetAccessTime", ""))
+            access_time = self._parse_timestamp(
+                rec.get("TargetAccessed")
+                or rec.get("TargetAccessTime")
+                or rec.get("LastModified")
+                or rec.get("LastAccess")
+                or rec.get("SourceAccessed")
+                or rec.get("SourceCreated")
+                or rec.get("TargetModified")
+            )
             
             if access_time is None:
                 logger.debug("No timestamp in JLECmd record; skipping %s", rec.get("SourceFile", ""))

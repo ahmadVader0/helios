@@ -171,7 +171,15 @@ class SleuthKitAdapter(ForensicToolAdapter):
         resolved = resolve_tool_binary("fsstat", self.fsstat_path)
         return str(resolved) if resolved else self.fsstat_path
 
-    def run_fls(self, image_or_drive: str, recursive: bool = True, deleted_only: bool = False, offset: str | None = None, mac_format: bool = False) -> str:
+    def run_fls(
+        self,
+        image_or_drive: str,
+        recursive: bool = True,
+        deleted_only: bool = False,
+        offset: str | None = None,
+        mac_format: bool = False,
+        timeout: int = 1800,
+    ) -> str:
         """
         Executes fls to list allocated and/or deleted file entries.
 
@@ -181,10 +189,11 @@ class SleuthKitAdapter(ForensicToolAdapter):
             deleted_only: If True, list only deleted entries (-d).
             offset: Sector offset for the partition (optional).
             mac_format: If True, output in mactime bodyfile format (-m).
+            timeout: Command timeout in seconds (default: 1800s / 30m).
 
         Returns:
             str: The raw stdout output of the fls command.
-            
+
         Raises:
             RuntimeError: If fls execution fails.
         """
@@ -214,7 +223,7 @@ class SleuthKitAdapter(ForensicToolAdapter):
         command.append(image_or_drive)
 
         logger.debug(f"Running fls: {' '.join(command)}")
-        result = self.run_subprocess(command, timeout=600, env=self._env())
+        result = self.run_subprocess(command, timeout=timeout, env=self._env())
         if result.returncode != 0:
             logger.error(f"fls execution failed: {result.stderr}")
             raise RuntimeError(f"fls execution failed: {result.stderr}")

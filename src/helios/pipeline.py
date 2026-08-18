@@ -140,20 +140,24 @@ def _event_logs_module(scan_options, device, events: list, alerts: list) -> None
     alerts.extend(evl_an.alerts)
 
 
-def _prefetch_module(scan_options, device, events: list) -> None:
+def _prefetch_module(scan_options, device, events: list, alerts: list | None = None) -> None:
     """Run Prefetch execution analyzer."""
     from helios.analyzers.prefetch import PrefetchAnalyzer
     pf_an = PrefetchAnalyzer(config={}, scan_options=scan_options)
     raw_arts = pf_an.collect(device)
     events.extend(pf_an.analyze(raw_arts))
+    if alerts is not None:
+        alerts.extend(pf_an.alerts)
 
 
-def _shellbags_module(scan_options, device, events: list) -> None:
+def _shellbags_module(scan_options, device, events: list, alerts: list | None = None) -> None:
     """Run ShellBags analyzer."""
     from helios.analyzers.shellbags import ShellBagsAnalyzer
     sb_an = ShellBagsAnalyzer(config={}, scan_options=scan_options)
     raw_arts = sb_an.collect(device)
     events.extend(sb_an.analyze(raw_arts))
+    if alerts is not None:
+        alerts.extend(sb_an.alerts)
 
 
 def _mft_module(
@@ -192,9 +196,10 @@ def _mft_module(
 
         src_dev = drive_devices.get(drv.drive_letter)
         device_id = src_dev.device_id if src_dev else ""
+        drv_clean = drv.drive_letter.replace(":", "").replace("/", "_").replace("\\", "_")
 
         try:
-            csv_path = adapter.parse_mft(mft_path, output_dir)
+            csv_path = adapter.parse_mft(mft_path, output_dir, out_name=f"mft_dump_{drv_clean}")
             artifact = RawArtifact(
                 artifact_id=f"mft-{drv.drive_letter}",
                 artifact_type="MFT_CSV",
@@ -253,9 +258,15 @@ def _usn_journal_module(
 
         src_dev = drive_devices.get(drv.drive_letter)
         device_id = src_dev.device_id if src_dev else ""
+        drv_clean = drv.drive_letter.replace(":", "").replace("/", "_").replace("\\", "_")
 
         try:
-            csv_path = adapter.parse_usn_journal(usn_path, output_dir, mft_file=mft_path)
+            csv_path = adapter.parse_usn_journal(
+                usn_path,
+                output_dir,
+                out_name=f"usn_dump_{drv_clean}",
+                mft_file=mft_path,
+            )
             artifact = RawArtifact(
                 artifact_id=f"usn-{drv.drive_letter}",
                 artifact_type="USN_CSV",
@@ -719,9 +730,9 @@ def run_investigation_pipeline(
     _run_module("event_logs", "Event Logs Analyzer", events, alerts,
                 lambda: _event_logs_module(scan_options, local_device, events, alerts))
     _run_module("program_execution", "Prefetch Execution Analyzer", events, alerts,
-                lambda: _prefetch_module(scan_options, local_device, events))
+                lambda: _prefetch_module(scan_options, local_device, events, alerts))
     _run_module("shellbags", "ShellBags Analyzer", events, alerts,
-                lambda: _shellbags_module(scan_options, local_device, events))
+                lambda: _shellbags_module(scan_options, local_device, events, alerts))
 
     # Resolve report directory early so MFT/USN modules write to the
     # investigation output directory rather than the process CWD.

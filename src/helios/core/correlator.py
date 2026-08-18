@@ -13,6 +13,7 @@ from helios.models import (
     DataEvent,
     Device,
     DeviceType,
+    DriveType,
     EventType,
     FileRecord,
     Investigation,
@@ -283,9 +284,29 @@ class CrossDeviceCorrelator:
         logger.debug("Detecting USB transfers via connection timestamps and file events...")
         inferred_events = []
         
-        # 1. Extract USB connection windows
-        usb_sessions: list[dict[str, Any]] = []
+        # 1. Identify Host vs USB/Removable Devices
+        host_dev_id = "Host PC"
+        usb_device_ids: set[str] = set()
+        removable_roots: set[str] = set()
 
+        for d in self.investigation.devices:
+            dtype = getattr(d.device_type, "value", str(d.device_type))
+            if dtype in ("PC", "LAPTOP", "SERVER"):
+                host_dev_id = d.device_id
+            elif dtype in ("USB", "ANDROID"):
+                usb_device_ids.add(d.device_id)
+                if d.mount_point:
+                    removable_roots.add(str(d.mount_point).lower())
+
+        # Also check drives scanned for removable / USB flags
+        for drv in getattr(self.investigation, "drives_scanned", []):
+            if getattr(drv, "is_removable", False) or getattr(drv, "drive_type", None) == DriveType.USB:
+                dl = str(getattr(drv, "drive_letter", "")).lower()
+                if dl:
+                    removable_roots.add(dl)
+
+        # 2. Extract USB connection windows
+        usb_sessions: list[dict[str, Any]] = []
         disconnects_by_device: dict[str, list[datetime]] = {}
         for d_event in self.investigation.events:
             if getattr(d_event, "event_type", None) != getattr(EventType, "USB_DISCONNECT", "USB_DISCONNECT"):
@@ -306,35 +327,50 @@ class CrossDeviceCorrelator:
                     (ts for ts in disconnects_by_device.get(dev, []) if _safe_ts(ts) > connect_time),
                     None,
                 )
+                # Bound open-ended sessions without a disconnect event to 4 hours maximum
+                session_end = _safe_ts(disconnect_time) if disconnect_time else connect_time + timedelta(hours=4)
                 usb_sessions.append({
                     "device_id": dev,
                     "connect_time": connect_time,
-                    "disconnect_time": _safe_ts(disconnect_time) if disconnect_time else None
+                    "disconnect_time": session_end,
+                    "has_real_disconnect": disconnect_time is not None,
                 })
 
-        host_dev_id = "Host PC"
-        for d in self.investigation.devices:
-            dtype = getattr(d.device_type, "value", str(d.device_type))
-            if dtype in ("PC", "LAPTOP", "SERVER"):
-                host_dev_id = d.device_id
-                break
-
-        # 2. Check file events falling within these windows
+        # 3. Check file events falling within these verified windows
         for session in usb_sessions:
             usb_dev = session["device_id"]
             for event in self.investigation.events:
-                is_file_creation = event.event_type == EventType.FILE_CREATE
-                is_target_usb = event.source_device == usb_dev
+                if event.event_type != EventType.FILE_CREATE:
+                    continue
+
+                event_path_lower = str(event.source_path).lower()
+                
+                # A file creation is a target USB transfer if:
+                # 1. The event device is a known USB device, or
+                # 2. The event path starts with a removable drive mount/letter, or
+                # 3. The event metadata indicates removable media.
+                # Host system drive (e.g. C:) file creations are NOT USB destinations.
+                is_on_removable = any(
+                    event_path_lower.startswith(root) for root in removable_roots if root
+                )
+                is_target_usb = (
+                    (event.source_device in usb_device_ids and event.source_device != host_dev_id)
+                    or is_on_removable
+                    or bool(event.metadata.get("removable_media_flag"))
+                )
+
+                if not is_target_usb:
+                    continue
+
                 event_time = _safe_ts(event.timestamp) if event.timestamp else None
                 if event_time is None or event_time.year >= 9000:
                     continue
-                session_end = session["disconnect_time"]
-                inside_window = (
-                    session["connect_time"] <= event_time
-                    and (session_end is None or event_time <= session_end)
-                )
 
-                if is_file_creation and is_target_usb and inside_window:
+                session_start = session["connect_time"]
+                session_end = session["disconnect_time"]
+                inside_window = session_start <= event_time <= session_end
+
+                if inside_window:
                     metadata = event.metadata or {}
                     transfer_event = DataEvent(
                         event_id=str(uuid.uuid4()),
@@ -344,12 +380,12 @@ class CrossDeviceCorrelator:
                         source_path=event.source_path,
                         destination_path=event.source_path,
                         raw_source="Correlator",
-                        confidence=Confidence.HIGH,
+                        confidence=Confidence.HIGH if session["has_real_disconnect"] else Confidence.MEDIUM,
                         metadata={
                             "original_event_id": event.event_id,
-                            "target_device": usb_dev,
+                            "target_device": usb_dev if usb_dev != "unknown_usb" else "Removable USB",
                             "file_name": metadata.get("file_name", Path(event.source_path).name),
-                            "description": f"File transferred to USB {usb_dev} during active connection session.",
+                            "description": f"File transferred to USB storage during active connection session.",
                         }
                     )
                     inferred_events.append(transfer_event)

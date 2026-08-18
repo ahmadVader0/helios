@@ -173,7 +173,7 @@ def investigate_cmd(
     result = run_investigation_pipeline(
         case_name=case,
         investigator="Analyst",
-        selected_drive_letters=drive_list if drive_list and not all_devices else None,
+        selected_drive_letters=drive_list if drive_list else None,
         profile_name=profile,
         date_from=date_from,
         date_to=date_to,

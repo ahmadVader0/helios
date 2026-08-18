@@ -204,7 +204,9 @@ class SuspiciousDetectorAnalyzer(AnalyzerBase):
 
         for artifact in artifacts:
             record = artifact.raw_data
-            if not record:
+            if isinstance(record, dict):
+                record = record.get("file_record")
+            if not record or not hasattr(record, "file_path"):
                 continue
 
             file_path = str(record.file_path).lower()
@@ -372,17 +374,25 @@ class SuspiciousDetectorAnalyzer(AnalyzerBase):
                     ))
 
             # RULE-004 — Crypto Containers
-            crypto_exts = self.rules.get("crypto_containers", [".hc", ".tc", ".vc"])
-            if ext in crypto_exts or "veracrypt" in file_name or "truecrypt" in file_name:
-                alerts.append(Alert(
-                    severity=Severity.HIGH,
-                    category="Encryption",
-                    title="Encrypted Container Detected",
-                    description=f"Potential TrueCrypt/VeraCrypt container found: {file_name}",
-                    evidence=[str(record.file_path)],
-                    device=record.source_device,
-                    confidence=Confidence.HIGH
-                ))
+            if _rule_enabled(self.rules, "crypto_containers", default=True):
+                crypto_cfg = self.rules.get("crypto_containers", [".hc", ".tc", ".vc"])
+                if isinstance(crypto_cfg, dict):
+                    crypto_exts = [str(e).lower() for e in crypto_cfg.get("extensions", [".hc", ".tc", ".vc"])]
+                elif isinstance(crypto_cfg, list):
+                    crypto_exts = [str(e).lower() for e in crypto_cfg]
+                else:
+                    crypto_exts = [".hc", ".tc", ".vc"]
+
+                if ext in crypto_exts or "veracrypt" in file_name or "truecrypt" in file_name:
+                    alerts.append(Alert(
+                        severity=Severity.HIGH,
+                        category="Encryption",
+                        title="Encrypted Container Detected",
+                        description=f"Potential TrueCrypt/VeraCrypt container found: {file_name}",
+                        evidence=[str(record.file_path)],
+                        device=record.source_device,
+                        confidence=Confidence.HIGH
+                    ))
 
         return alerts
 

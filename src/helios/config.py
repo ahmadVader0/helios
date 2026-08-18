@@ -124,6 +124,8 @@ def load_config(config_dir: Path | None = None) -> HeliosConfig:
     if main_config is None:
         main_config = _load_yaml("default_config.yaml")
     if isinstance(main_config, dict):
+        if "tool_paths" in main_config and isinstance(main_config["tool_paths"], dict):
+            config.tool_paths.update(main_config["tool_paths"])
         if "working_hours" in main_config:
             config.working_hours.update(main_config["working_hours"])
         if "hashing" in main_config:
@@ -158,7 +160,8 @@ def load_config(config_dir: Path | None = None) -> HeliosConfig:
     from helios.adapters.base import resolve_tool_binary
 
     for tool in TOOLS_IN_USE:
-        resolved = resolve_tool_binary(tool)
+        explicit = config.tool_paths.get(tool)
+        resolved = resolve_tool_binary(tool, explicit_path=explicit)
         config.tool_paths[tool] = str(resolved) if resolved else None
 
     return config
