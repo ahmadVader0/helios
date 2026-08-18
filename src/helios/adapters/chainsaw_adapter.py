@@ -100,66 +100,110 @@ class ChainsawAdapter(ForensicToolAdapter):
         args = ["hunt", str(evtx_dir), "-s", str(sigma_rules_dir)]
         if mapping:
             args.extend(["--mapping", str(mapping)])
-        args.append("--json")
+        args.extend(["--json", "--no-banner"])
 
         result = self.run(args, timeout=600)
 
-        # Only trust the hunt output when chainsaw actually succeeded. A
-        # failed or empty hunt must never fall back to parsing a stale
-        # findings file left over from a previous run (which would fabricate
-        # detections), so the output file is always (re)written first.
+        # Only trust the hunt output when chainsaw actually succeeded or produced valid JSON.
         output_json.parent.mkdir(parents=True, exist_ok=True)
         with open(output_json, "w", encoding="utf-8") as f:
             f.write(result.stdout or "")
 
-        if result.returncode != 0:
-            logger.warning(
-                "Chainsaw hunt failed (rc=%d) for %s: %s",
-                result.returncode, evtx_dir, (result.stderr or "")[:500],
+        # Try parsing structured findings from output file or stdout
+        alerts = self._parse_findings(output_json)
+        if not alerts and result.stdout:
+            alerts = self._parse_findings_from_text(result.stdout)
+
+        if not alerts and result.returncode != 0:
+            err_msg = (result.stderr or result.stdout or "").strip()
+            # Clean any leftover banner/newlines
+            first_err = [ln for ln in err_msg.splitlines() if ln.strip() and not ln.strip().startswith("█")][:3]
+            logger.debug(
+                "Chainsaw hunt returned rc=%d for %s: %s",
+                result.returncode, evtx_dir, " ".join(first_err) or "non-zero returncode",
             )
             return []
 
-        return self._parse_findings(output_json)
+        return alerts
+
+    @staticmethod
+    def _extract_json_data(raw: str) -> Any:
+        """Extract JSON structure from mixed text/JSON output."""
+        raw = raw.strip()
+        if not raw:
+            return None
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            pass
+        start_arr = raw.find("[")
+        end_arr = raw.rfind("]")
+        if start_arr != -1 and end_arr != -1 and end_arr > start_arr:
+            try:
+                return json.loads(raw[start_arr : end_arr + 1])
+            except json.JSONDecodeError:
+                pass
+        start_obj = raw.find("{")
+        end_obj = raw.rfind("}")
+        if start_obj != -1 and end_obj != -1 and end_obj > start_obj:
+            try:
+                return json.loads(raw[start_obj : end_obj + 1])
+            except json.JSONDecodeError:
+                pass
+        return None
+
+    def _parse_findings_from_text(self, text: str) -> list[Alert]:
+        """Parse Alerts from raw string output containing JSON."""
+        data = self._extract_json_data(text)
+        if not data:
+            return []
+        return self._build_alerts_from_data(data)
 
     def _parse_findings(self, json_file: Path) -> list[Alert]:
         """Parse Chainsaw detection findings into Alert objects with mapped severities."""
-        alerts: list[Alert] = []
         if not json_file.exists():
-            return alerts
+            return []
 
         try:
             with open(json_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            items = self._flatten_detections(data)
-
-            for item in items:
-                title = item.get("name") or item.get("title") or "Chainsaw Sigma Match"
-                level = str(item.get("level", "medium")).lower()
-                document = item.get("document", item.get("Document", ""))
-
-                severity_map = {
-                    "critical": Severity.CRITICAL,
-                    "high": Severity.HIGH,
-                    "medium": Severity.MEDIUM,
-                    "low": Severity.LOW,
-                    "info": Severity.INFO,
-                }
-                severity = severity_map.get(level, Severity.MEDIUM)
-
-                alerts.append(
-                    Alert(
-                        title=title,
-                        category="Event Log Anomaly",
-                        description=item.get("description", "Matched Sigma detection rule in Windows Event Logs"),
-                        severity=severity,
-                        confidence=Confidence.HIGH,
-                        evidence=[str(document)] if document else [],
-                    )
-                )
+                content = f.read()
+            data = self._extract_json_data(content)
+            if not data:
+                return []
+            return self._build_alerts_from_data(data)
         except Exception as e:
-            logger.error(f"Error parsing Chainsaw JSON output: {e}")
+            logger.debug(f"Error parsing Chainsaw JSON output from {json_file}: {e}")
+            return []
 
+    def _build_alerts_from_data(self, data: Any) -> list[Alert]:
+        """Convert extracted JSON detection data into Alert instances."""
+        alerts: list[Alert] = []
+        items = self._flatten_detections(data)
+
+        for item in items:
+            title = item.get("name") or item.get("title") or "Chainsaw Sigma Match"
+            level = str(item.get("level", "medium")).lower()
+            document = item.get("document", item.get("Document", ""))
+
+            severity_map = {
+                "critical": Severity.CRITICAL,
+                "high": Severity.HIGH,
+                "medium": Severity.MEDIUM,
+                "low": Severity.LOW,
+                "info": Severity.INFO,
+            }
+            severity = severity_map.get(level, Severity.MEDIUM)
+
+            alerts.append(
+                Alert(
+                    title=title,
+                    category="Event Log Anomaly",
+                    description=item.get("description", "Matched Sigma detection rule in Windows Event Logs"),
+                    severity=severity,
+                    confidence=Confidence.HIGH,
+                    evidence=[str(document)] if document else [],
+                )
+            )
         return alerts
 
     @staticmethod

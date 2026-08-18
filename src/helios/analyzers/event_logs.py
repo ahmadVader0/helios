@@ -236,15 +236,41 @@ class EventLogsAnalyzer(AnalyzerBase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             output_json = Path(tmp_dir) / "chainsaw_findings.json"
             for artifact in artifacts:
+                findings: list[Alert] = []
+                temp_export: Path | None = None
                 try:
                     findings = self.chainsaw_adapter.run_sigma_hunt(
                         artifact.source_path, sigma_rules_dir, output_json
                     )
+                    # If direct hunt on live Windows found nothing (e.g. locked EVTX), try wevtutil export
+                    if not findings and os.name == "nt":
+                        import subprocess as _sp
+                        temp_evtx = Path(tmp_dir) / f"{artifact.source_path.stem}_chainsaw.evtx"
+                        res = _sp.run(
+                            ["wevtutil", "epl", artifact.source_path.stem, str(temp_evtx), "/ow:true"],
+                            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+                        )
+                        if res.returncode != 0:
+                            res = _sp.run(
+                                ["wevtutil", "epl", str(artifact.source_path), str(temp_evtx), "/lf:true", "/ow:true"],
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60,
+                            )
+                        if res.returncode == 0 and temp_evtx.exists() and temp_evtx.stat().st_size > 0:
+                            temp_export = temp_evtx
+                            findings = self.chainsaw_adapter.run_sigma_hunt(
+                                temp_export, sigma_rules_dir, output_json
+                            )
                 except Exception as e:
-                    logger.warning(
+                    logger.debug(
                         "Chainsaw Sigma hunt failed for %s: %s", artifact.source_path, e
                     )
                     continue
+                finally:
+                    if temp_export and temp_export.exists():
+                        try:
+                            temp_export.unlink(missing_ok=True)
+                        except Exception:
+                            pass
                 for finding in findings:
                     if finding.evidence and isinstance(finding.evidence, list):
                         evidence = [str(artifact.source_path)] + [str(e) for e in finding.evidence if e]
