@@ -54,3 +54,6 @@ demo_output/
 .agents/
 AGENTS.md
 AUDIT_REPORT.md
+Errors.md
+*.txt
+!requirements.txt
