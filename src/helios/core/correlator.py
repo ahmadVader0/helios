@@ -223,53 +223,11 @@ class CrossDeviceCorrelator:
                     )
                     chains.append(chain)
 
-        # Single-volume event-based chain building (LNK / USB session / Deletions)
-        for event in self.investigation.events:
-            etype = getattr(event, "event_type", None)
-            etype_val = etype.value if etype is not None and hasattr(etype, "value") else str(etype or "")
-            sp = getattr(event, "source_path", "")
-            dp = getattr(event, "destination_path", "")
-
-            if etype_val == "FILE_DELETE":
-                fname = Path(sp).name if sp else "Unknown"
-                chain = MovementChain(
-                    chain_id=str(uuid.uuid4()),
-                    file_name=fname,
-                    sha256_hash=getattr(event, "file_hash", "") or "N/A",
-                    hops=[(_safe_ts(event.timestamp), event.source_device or "Host PC", "RecycleBin", etype_val)],
-                    source_device=event.source_device or "Host PC",
-                    target_devices=["RecycleBin"],
-                    exfiltrated=False,
-                    confidence=Confidence.MEDIUM,
-                )
-                chains.append(chain)
-            elif etype_val in ("FILE_COPY", "FILE_MOVE") and (dp or sp):
-                meta = getattr(event, "metadata", {}) or {}
-                dst_dev = meta.get("target_device")
-                src_dev = event.source_device or "Host PC"
-                if not dst_dev:
-                    sp_drive = Path(sp).drive if sp else ""
-                    dp_drive = Path(dp).drive if dp else ""
-                    if dp_drive and sp_drive and dp_drive.lower() != sp_drive.lower():
-                        dst_dev = dp_drive
-                    elif "usb" in str(event.raw_source).lower() or "usb" in str(meta.get("description", "")).lower():
-                        dst_dev = "USB Storage"
-
-                if not dst_dev:
-                    dst_dev = "External / Removable"
-
-                fname = Path(sp or dp).name if (sp or dp) else "Unknown"
-                chain = MovementChain(
-                    chain_id=str(uuid.uuid4()),
-                    file_name=fname,
-                    sha256_hash=getattr(event, "file_hash", "") or "N/A",
-                    hops=[(_safe_ts(event.timestamp), src_dev, dst_dev, etype_val)],
-                    source_device=src_dev,
-                    target_devices=[dst_dev],
-                    exfiltrated="removable" in str(dp).lower() or "usb" in str(dst_dev).lower(),
-                    confidence=Confidence.MEDIUM,
-                )
-                chains.append(chain)
+        # NOTE: per-event "echo" chains (one chain per FILE_DELETE /
+        # FILE_COPY / FILE_MOVE event) were removed deliberately. They
+        # flooded the movement graph with single-hop duplicates of events
+        # that the report generator already surfaces directly from the
+        # timeline, drowning real cross-device hash matches.
 
         return chains
 
@@ -385,7 +343,7 @@ class CrossDeviceCorrelator:
                             "original_event_id": event.event_id,
                             "target_device": usb_dev if usb_dev != "unknown_usb" else "Removable USB",
                             "file_name": metadata.get("file_name", Path(event.source_path).name),
-                            "description": f"File transferred to USB storage during active connection session.",
+                            "description": "File transferred to USB storage during active connection session.",
                         }
                     )
                     inferred_events.append(transfer_event)

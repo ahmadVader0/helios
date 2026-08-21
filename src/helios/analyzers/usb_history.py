@@ -140,15 +140,21 @@ class UsbHistoryAnalyzer(AnalyzerBase):
         """
         events: list[DataEvent] = []
 
+        # Track which sources have been parsed so the locked-SYSTEM-hive
+        # fallback never re-runs a parser that already produced events
+        # (this used to duplicate every USBSTOR connect event).
+        live_winreg_done = False
+
         for artifact in artifacts:
             try:
                 if artifact.artifact_type == "live_registry":
                     events.extend(self._parse_live_winreg(artifact.device_id))
+                    live_winreg_done = True
                 elif artifact.source_path.name.lower() == "setupapi.dev.log":
                     events.extend(self._parse_setupapi(artifact))
                 elif artifact.source_path.name.lower() == "system":
                     sys_events = self._parse_system_registry(artifact)
-                    if not sys_events and os.name == "nt":
+                    if not sys_events and os.name == "nt" and not live_winreg_done:
                         sys_events = self._parse_live_winreg(artifact.device_id)
                     events.extend(sys_events)
                 elif artifact.source_path.name.lower() == "ntuser.dat":
@@ -156,13 +162,19 @@ class UsbHistoryAnalyzer(AnalyzerBase):
             except Exception as e:
                 logger.error("Error processing USB artifact %s: %s", artifact.source_path, e)
 
-        # Deduplicate events across live winreg, offline hives, and logs
+        # Deduplicate events across live winreg, offline hives, and logs.
+        # Identifiers are compared case-insensitively because setupapi.dev.log
+        # and the registry frequently differ in casing for the same device.
         seen_events: set[tuple[str, str, str]] = set()
         deduped_events: list[DataEvent] = []
         for evt in events:
             key = (
                 str(evt.event_type),
-                str(evt.metadata.get("serial_number") or evt.metadata.get("hardware_id") or evt.source_path),
+                str(
+                    evt.metadata.get("serial_number")
+                    or evt.metadata.get("hardware_id")
+                    or evt.source_path
+                ).lower(),
                 evt.timestamp.isoformat() if evt.timestamp else "",
             )
             if key not in seen_events:
@@ -367,6 +379,10 @@ class UsbHistoryAnalyzer(AnalyzerBase):
         """
         Parse setupapi.dev.log for exact first-connect timestamps.
 
+        Only USB device installs are emitted (the log records installs for
+        every device class). Section start timestamps in the log are in
+        machine-LOCAL time and are converted to UTC here.
+
         Args:
             artifact (RawArtifact): The log artifact.
 
@@ -389,12 +405,18 @@ class UsbHistoryAnalyzer(AnalyzerBase):
                         parts = line.split("-")
                         if len(parts) > 1:
                             hw_id = parts[1].strip().rstrip("]").strip()
-                            current_device["hw_id"] = hw_id
+                            # Skip non-USB device installs (disk, monitor,
+                            # network adapter, software devices, ...)
+                            if "usb\\" in hw_id.lower():
+                                current_device["hw_id"] = hw_id
                 elif line.startswith(">>>  Section start") and current_device is not None:
                     time_match = re.search(r"(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})", line)
                     if time_match:
                         try:
-                            ts = datetime.strptime(time_match.group(1), "%Y/%m/%d %H:%M:%S").replace(tzinfo=timezone.utc)
+                            naive_local = datetime.strptime(time_match.group(1), "%Y/%m/%d %H:%M:%S")
+                            # setupapi timestamps are local machine time —
+                            # convert to UTC instead of mislabeling them.
+                            ts = naive_local.astimezone(timezone.utc)
                             current_device["timestamp"] = ts
                         except ValueError:
                             pass

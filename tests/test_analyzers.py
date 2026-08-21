@@ -75,7 +75,9 @@ def test_usb_history_analyze_parses_setupapi_log(tmp_path):
     events = UsbHistoryAnalyzer().analyze([artifact])
     assert len(events) == 1
     assert events[0].event_type == EventType.USB_CONNECT
-    assert events[0].timestamp == datetime(2023, 10, 5, 14, 32, 1, tzinfo=timezone.utc)
+    # setupapi timestamps are machine-LOCAL time; Helios converts to UTC.
+    naive_local = datetime(2023, 10, 5, 14, 32, 1)
+    assert events[0].timestamp == naive_local.astimezone(timezone.utc)
     assert events[0].metadata["hardware_id"] == "USB\\VID_0951&PID_1666"
 
 

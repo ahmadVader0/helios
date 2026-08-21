@@ -89,6 +89,15 @@ class EZToolsAdapter(ForensicToolAdapter):
             ))
         return events
 
+    def tool_available(self, tool_name: str) -> bool:
+        """
+        Check whether one specific EZ tool (e.g. 'lecmd', 'sbecmd') can be
+        resolved on this platform. Analyzers use this to fail loudly —
+        with an actionable message — instead of silently returning zero
+        events when only the Windows .exe build is present.
+        """
+        return self._get_tool_path(tool_name) is not None
+
     def _get_tool_path(self, tool_name: str) -> Path | None:
         """
         Helper to find the executable path for a specific tool.

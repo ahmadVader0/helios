@@ -114,6 +114,25 @@ def _build_event_index(events: list[Any]) -> dict[str, list[Any]]:
 
 _EVENT_PREFERENCE = {"FILE_COPY": 0, "FILE_MOVE": 1, "FILE_CREATE": 2, "FILE_DELETE": 3}
 
+# System/internal artifacts that must never surface as user-facing
+# deletions or transfers (BitLocker keys, NTFS metadata, SVI, recycle
+# bin internals). Shared by every row-building path so correlator
+# chains and event supplements are filtered identically.
+_SYS_NOISE_TOKENS = (
+    "system volume information", "$extend", "$recycle.bin",
+    "fve2.{", "fve.{", "$mft", "$logfile", "$usnjrnl",
+    "$secure", "$badclus", "$bitmap", "$boot", "$volume",
+)
+
+def _is_system_noise(path: str) -> bool:
+    """True when a path is internal OS/NTFS metadata, not user evidence."""
+    lowered = str(path or "").lower()
+    name = _path_basename(lowered)
+    return (
+        any(tok in lowered for tok in _SYS_NOISE_TOKENS)
+        or name.lower() in ("$recycle.bin", "$extend", "system volume information")
+    )
+
 # Profile-specific report templates: each scan type renders a genuinely
 # different report focused on what that profile actually analyzes.
 _PROFILE_TEMPLATES: dict[str, str] = {
@@ -194,6 +213,16 @@ def build_movement_rows(
         source = _display_name(_chain_get(chain, "source_device"), name_map)
         targets = _chain_get(chain, "target_devices") or []
         target_raw = targets[0] if isinstance(targets, (list, tuple)) and targets else targets
+
+        # Skip internal OS/NTFS metadata chains entirely (BitLocker FVE2
+        # keys, $Extend journal entries, SVI) — they are not user evidence.
+        chain_paths = " ".join(str(p) for p in (
+            file_name,
+            _chain_get(chain, "source_path", "") or "",
+            target_raw or "",
+        ))
+        if _is_system_noise(chain_paths):
+            continue
 
         etype = str(_chain_get(chain, "event_type") or "")
         target_str = str(target_raw or "")
@@ -374,7 +403,6 @@ class ReportGenerator:
 
         # Supplement deletions with FILE_DELETE events from the events list
         # that aren't already captured by the correlator (e.g. Recycle Bin entries).
-        _SYS_NOISE_TOKENS = ("system volume information", "$extend", "fve2.{", "fve.{")
         _del_seen = {(d["file_name"], d.get("timestamp", "")) for d in deletions}
         name_map = _device_name_map(devices)
         for evt in events:
@@ -383,10 +411,10 @@ class ReportGenerator:
             if etype_val != "FILE_DELETE":
                 continue
             src_path = str(getattr(evt, "source_path", ""))
-            if any(tok in src_path.lower() for tok in _SYS_NOISE_TOKENS):
+            if _is_system_noise(src_path):
                 continue
             fname = _path_basename(src_path)
-            if not fname or fname.lower() in ("$recycle.bin", "$extend", "system volume information") or (fname, "") in _del_seen:
+            if not fname or (fname, "") in _del_seen:
                 continue
             ts = _format_timestamp(getattr(evt, "timestamp", None))
             if (fname, ts) in _del_seen:
@@ -405,10 +433,10 @@ class ReportGenerator:
             if not getattr(fr, "is_deleted", False) or getattr(fr, "is_system", False):
                 continue
             fr_path = str(getattr(fr, "file_path", ""))
-            if any(tok in fr_path.lower() for tok in _SYS_NOISE_TOKENS):
+            if _is_system_noise(fr_path):
                 continue
             fname = getattr(fr, "file_name", "") or _path_basename(fr_path)
-            if not fname or fname.lower() in ("$recycle.bin", "$extend", "system volume information"):
+            if not fname:
                 continue
             ts = _format_timestamp(getattr(fr, "modified", None) or getattr(fr, "created", None))
             if (fname, ts) in _del_seen:
@@ -452,8 +480,7 @@ class ReportGenerator:
             for fr in file_records
             if getattr(fr, "is_deleted", False)
             and not getattr(fr, "is_system", False)
-            and not any(tok in str(getattr(fr, "file_path", "")).lower() for tok in _SYS_NOISE_TOKENS)
-            and getattr(fr, "file_name", "").lower() not in ("$recycle.bin", "$extend", "system volume information")
+            and not _is_system_noise(f"{getattr(fr, 'file_path', '')} {getattr(fr, 'file_name', '')}")
         ]
 
         # Build specialized row lists

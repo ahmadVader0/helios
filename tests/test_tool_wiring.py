@@ -273,6 +273,7 @@ def test_shellbags_sbecmd_events(tmp_path, monkeypatch):
     artifact.metadata["user"] = "alice"
 
     fake_ez = SimpleNamespace(
+        tool_available=lambda name: True,
         run_sbecmd=lambda hive_path, csv_dir: [
             {
                 "FolderPath": "D:\\Projects",

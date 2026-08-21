@@ -26,7 +26,11 @@ from helios.models import (
     EventType,
     ScanOptions,
 )
-from helios.utils.ntfs import decode_usn_reason_from_string, parse_mftecmd_timestamp
+from helios.utils.ntfs import (
+    build_volume_path,
+    decode_usn_reason_from_string,
+    parse_mftecmd_timestamp,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -101,12 +105,13 @@ class USNJournalAnalyzer(AnalyzerBase):
                 continue
 
             device_id = artifact.device_id
+            volume = str((artifact.metadata or {}).get("volume", "") or "")
 
             try:
                 with open(csv_path, newline="", encoding="utf-8-sig") as f:
                     reader = csv.DictReader(f)
                     for row in reader:
-                        event = self._row_to_event(row, device_id)
+                        event = self._row_to_event(row, device_id, volume)
                         if event is not None:
                             results.append(event)
             except Exception:
@@ -115,7 +120,7 @@ class USNJournalAnalyzer(AnalyzerBase):
         return results
 
     def _row_to_event(
-        self, row: dict[str, str], device_id: str
+        self, row: dict[str, str], device_id: str, volume: str = ""
     ) -> DataEvent | None:
         """Convert one USN CSV row to a DataEvent, or None if not interesting."""
         name = row.get("Name") or row.get("FileName") or ""
@@ -123,7 +128,7 @@ class USNJournalAnalyzer(AnalyzerBase):
             return None
 
         parent_path = row.get("ParentPath", "") or ""
-        full_path = f"{parent_path.rstrip(chr(92))}\\{name}" if parent_path else name
+        full_path = build_volume_path(parent_path, name, volume)
 
         reasons_raw = row.get("UpdateReasons") or row.get("UpdateReason") or ""
         reasons = decode_usn_reason_from_string(reasons_raw)

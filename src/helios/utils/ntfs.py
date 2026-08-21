@@ -12,6 +12,7 @@ Provides:
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta, timezone
 
 # Windows FILETIME epoch (1601-01-01) offset from Unix epoch, in 100ns ticks.
@@ -145,6 +146,33 @@ def has_alternate_data_stream(file_name: str | None) -> bool:
     return ":" in path_str
 
 
+def build_volume_path(parent_path: str | None, file_name: str, volume: str = "") -> str:
+    """Join an MFTECmd ParentPath + FileName into a clean, volume-prefixed path.
+
+    MFTECmd emits ``ParentPath`` as ``.`` (or empty) for root-directory
+    entries and relative paths for the rest. This normalizes those to a
+    proper absolute-looking Windows path:
+
+        build_volume_path(".", "a.txt", "D:")      -> "D:\\a.txt"
+        build_volume_path("Users", "a.txt", "D:")  -> "D:\\Users\\a.txt"
+        build_volume_path("", "a.txt", "")         -> "a.txt"
+    """
+    parent = (parent_path or "").strip().strip("\\")
+    # MFTECmd prefixes relative parents with ".\" (e.g. ".\System Volume
+    # Information") — normalize it away so paths don't render as "X:\.\...".
+    if parent == "." or parent.startswith(".\\"):
+        parent = parent[2:]
+    name = (file_name or "").strip()
+    if parent in ("", "."):
+        joined = name
+    else:
+        joined = f"{parent}\\{name}"
+    vol = (volume or "").strip().rstrip("\\/")
+    if vol and not re.match(r"^[A-Za-z]:", joined):
+        joined = f"{vol}\\{joined}"
+    return joined
+
+
 def detect_timestomping(
     si_created: datetime | None,
     si_modified: datetime | None,
@@ -159,27 +187,37 @@ def detect_timestomping(
     - ``$FILE_NAME`` (FN): updated only by the kernel filesystem driver on
       file creation, rename or move, much harder to forge from user-mode.
 
-    A meaningful SI-earlier-than-FN mismatch (SI creation predates FN
-    creation by >60 seconds) or sub-second zeroing on SI while FN retains
-    precision are classic timestomping indicators.
+    Only high-signal indicators are used — patterns that the NTFS kernel
+    itself can never produce:
 
-    Note: ``si_modified < si_created`` is normal for standard file copy
-    operations (preserving original mtime while assigning new ctime) and
-    is therefore NOT flagged as timestomping.
+    1. SI created NEWER than FN created (>60s). The kernel always records
+       the FN entry at (or before) the moment the SI attributes are
+       written, so an SI creation "after" the FN record means someone
+       rewrote the SI timestamps.
+    2. Sub-second zeroing: SI created has exactly .000000 microseconds
+       while FN retains precision and the two diverge — the signature of
+       timestomp-style whole-second forgery.
+
+    Deliberately NOT flagged (verified against real volumes — these are
+    the normal results of file copies):
+    - ``si_modified < si_created`` (copy preserves source mtime)
+    - ``fn_created - si_created > 60s`` (MFTECmd's own `Copied` column
+      shows this is overwhelmingly the copy pattern; callers should skip
+      rows where MFTECmd already says Copied=True)
     """
     if not si_created or not fn_created:
         return False
 
-    # 1. SI creation predates FN creation by >60s (classic $MFT timestomp)
-    if (fn_created - si_created).total_seconds() > 60:
+    # 1. SI created is newer than FN created by >60s (kernel-impossible)
+    if (si_created - fn_created).total_seconds() > 60:
         return True
 
-    # 2. SI modification predates FN modification by >60s
-    if fn_modified and si_modified and (fn_modified - si_modified).total_seconds() > 60:
-        return True
-
-    # 3. Sub-second zeroing heuristic: SI created has 0 microseconds while FN has non-zero
-    if si_created.microsecond == 0 and fn_created.microsecond != 0 and abs((fn_created - si_created).total_seconds()) > 5:
+    # 2. Whole-second zeroing on SI while FN keeps sub-second precision
+    if (
+        si_created.microsecond == 0
+        and fn_created.microsecond != 0
+        and abs((fn_created - si_created).total_seconds()) > 5
+    ):
         return True
 
     return False

@@ -207,6 +207,7 @@ def _mft_module(
                 device_id=device_id,
                 collected_at=datetime.now(tz=timezone.utc),
                 raw_data=csv_path,
+                metadata={"volume": drv.drive_letter},
             )
             results = analyzer.analyze([artifact])
             for r in results:
@@ -274,6 +275,7 @@ def _usn_journal_module(
                 device_id=device_id,
                 collected_at=datetime.now(tz=timezone.utc),
                 raw_data=csv_path,
+                metadata={"volume": drv.drive_letter},
             )
             results = analyzer.analyze([artifact])
             for r in results:

@@ -92,7 +92,20 @@ class ShellBagsAnalyzer(AnalyzerBase):
         Also detects and flags disconnected USB folder browsing.
         """
         events = []
-        
+
+        if not artifacts:
+            raise RuntimeError(
+                "No ShellBag registry hives collected (NTUSER.DAT / UsrClass.dat "
+                "not found or locked — live-system hives may need VSS or an "
+                "offline copy)"
+            )
+
+        if not self.ez_tools.tool_available("sbecmd"):
+            raise RuntimeError(
+                "SBECmd.exe not available on this platform — ShellBag parsing requires "
+                "the bundled Windows binary (run on Windows, not WSL/Linux)"
+            )
+
         for artifact in artifacts:
             try:
                 logger.info(f"Analyzing ShellBags in {artifact.source_path}")
@@ -114,7 +127,10 @@ class ShellBagsAnalyzer(AnalyzerBase):
                         timestamp=ts,
                         event_type=EventType.FILE_ACCESS,
                         source_device=artifact.device_id,
-                        source_path=str(artifact.source_path),
+                        # The accessed FOLDER is the evidence — the hive is
+                        # just the source artifact and must not become the
+                        # displayed path in the timeline.
+                        source_path=folder_path,
                         raw_source="ShellBags",
                         metadata={
                             "folder_path": folder_path,

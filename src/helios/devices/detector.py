@@ -40,7 +40,12 @@ def _detect_drives_proc_mounts() -> list[DriveInfo]:
                                   "devpts", "securityfs", "cgroup", "cgroup2",
                                   "pstore", "debugfs", "hugetlbfs", "mqueue",
                                   "configfs", "fusectl", "binfmt_misc",
-                                  "autofs", "tracefs", "fuse.portal"):
+                                  "autofs", "tracefs", "fuse.portal",
+                                  "overlay", "rootfs", "swap"):
+                        continue
+                    # Skip WSL internal plumbing mounts (/mnt/wsl, /mnt/wslg)
+                    if (mount.startswith("/mnt/wsl") or mount == "/init"
+                            or mount.startswith("/usr/lib/wsl")):
                         continue
                     total, free = _get_disk_usage(mount)
                     found.append(DriveInfo(
@@ -83,7 +88,10 @@ def detect_drives() -> list[DriveInfo]:
                     mount = block["mountpoints"][0] if block["mountpoints"] else None
                 blk_type = block.get("type", "")
 
-                if mount and blk_type in ("part", "disk", "lvm", "crypt"):
+                if (mount and blk_type in ("part", "disk", "lvm", "crypt")
+                        and mount != "[SWAP]"
+                        and not mount.startswith("/mnt/wsl")
+                        and not mount.startswith("/usr/lib/wsl")):
                     is_removable = block.get("rm") in (True, "1", 1)
                     drive_type = DriveType.USB if is_removable else DriveType.HDD
                     total, free = _get_disk_usage(mount)
@@ -108,9 +116,13 @@ def detect_drives() -> list[DriveInfo]:
         except (subprocess.SubprocessError, json.JSONDecodeError, FileNotFoundError):
             pass  # fall through to /proc/mounts below
 
-        # Fallback (also used when lsblk reports no mounted blocks)
-        if not drives:
-            drives = _detect_drives_proc_mounts()
+        # Always merge /proc/mounts into the lsblk results: lsblk cannot see
+        # WSL drvfs/9p mounts (/mnt/c, /mnt/d, ...) or network mounts, yet
+        # those are exactly the Windows volumes a WSL forensic scan targets.
+        lsblk_mounts = {d.drive_letter for d in drives}
+        for d in _detect_drives_proc_mounts():
+            if d.drive_letter not in lsblk_mounts:
+                drives.append(d)
 
     elif os_name == "Windows":
         # 1. Primary: Native Windows Kernel32 API via ctypes (works on 100% of Windows versions)

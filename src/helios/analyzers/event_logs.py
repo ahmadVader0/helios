@@ -111,6 +111,13 @@ class EventLogsAnalyzer(AnalyzerBase):
         alerts: list[Alert] = []
         failed_logons_by_account: dict[str, list[datetime]] = {}
 
+        if not artifacts:
+            raise RuntimeError(
+                "No EVTX event logs collected (Windows\\System32\\Winevt\\Logs not "
+                "found on the scanned volume — event-log analysis requires a live "
+                "Windows system drive or provided artifact paths)"
+            )
+
         for artifact in artifacts:
             try:
                 records = self._parse_evtx(artifact.source_path)

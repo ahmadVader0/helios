@@ -4,6 +4,7 @@ Helios CLI Entry Point — Supports direct command flags and interactive menu mo
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -142,12 +143,24 @@ def investigate_cmd(
 
     drive_list = drives.split(",") if drives else None
     if drive_list:
-        drive_list = [d.strip().upper().rstrip(":\\") + ":" for d in drive_list if d.strip()]
+        if os.name == "nt":
+            # Windows-style letters ("d", "d:") -> "D:"
+            drive_list = [d.strip().upper().rstrip(":\\") + ":" for d in drive_list if d.strip()]
+        else:
+            # POSIX: keep raw mount paths (/mnt/d, /media/usb, ...) as-is.
+            drive_list = [d.strip() for d in drive_list if d.strip()]
         if not drive_list:
-            click.echo("Error: no valid drive letters after normalization.", err=True)
+            click.echo("Error: no valid drives after normalization.", err=True)
             raise SystemExit(1)
     path_list = path.split(",") if path else []
     extra_paths = path_list or None
+
+    # --all-devices means "scan everything detected"; a simultaneous
+    # --drives selection must not be silently discarded, so warn and let
+    # --all-devices win explicitly.
+    if all_devices and drive_list:
+        click.echo("Warning: --all-devices overrides --drives; scanning ALL detected devices.", err=True)
+        drive_list = None
 
     scan_options = ScanOptions(
         drives=drive_list or [],

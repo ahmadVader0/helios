@@ -129,7 +129,24 @@ class LnkJumpListAnalyzer(AnalyzerBase):
             List of parsed DataEvent objects.
         """
         events = []
-        
+
+        if not artifacts:
+            raise RuntimeError(
+                "No LNK/JumpList artifacts collected (no user Recent folders found "
+                "on the scanned volume)"
+            )
+
+        if not self.ez_tools.tool_available("lecmd"):
+            raise RuntimeError(
+                "LECmd.exe not available on this platform — LNK parsing requires "
+                "the bundled Windows binary (run on Windows, not WSL/Linux)"
+            )
+        if not self.ez_tools.tool_available("jlecmd"):
+            raise RuntimeError(
+                "JLECmd.exe not available on this platform — JumpList parsing requires "
+                "the bundled Windows binary (run on Windows, not WSL/Linux)"
+            )
+
         with tempfile.TemporaryDirectory() as tmp_dir:
             csv_output_dir = Path(tmp_dir)
             
@@ -255,7 +272,9 @@ class LnkJumpListAnalyzer(AnalyzerBase):
                 timestamp=access_time,
                 event_type=EventType.FILE_ACCESS,
                 source_device=source_device,
-                source_path=source_path,
+                # Show the accessed target when known; the jumplist file
+                # itself is only the source artifact.
+                source_path=target or str(source_path),
                 raw_source="JLECmd",
                 metadata=metadata
             )

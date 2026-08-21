@@ -1,44 +1,35 @@
 from __future__ import annotations
 
-import os
 import struct
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
-from helios.adapters.base import resolve_tool_binary, extract_timestamp
+from helios.adapters.base import resolve_tool_binary
 from helios.adapters.ez_tools_adapter import EZToolsAdapter
 from helios.adapters.exiftool_adapter import ExifToolAdapter
 from helios.adapters.sleuthkit_adapter import SleuthKitAdapter
 from helios.analyzers.base import RawArtifact
-from helios.analyzers.event_logs import EventLogsAnalyzer
 from helios.analyzers.file_type_verifier import FileTypeVerifierAnalyzer
 from helios.analyzers.lnk_jumplists import LnkJumpListAnalyzer
 from helios.analyzers.prefetch import PrefetchAnalyzer
-from helios.analyzers.recycle_bin import RecycleBinAnalyzer
 from helios.analyzers.shellbags import ShellBagsAnalyzer
 from helios.analyzers.suspicious_detector import SuspiciousDetectorAnalyzer
-from helios.analyzers.usb_history import UsbHistoryAnalyzer
-from helios.config import HeliosConfig, load_config
+from helios.config import load_config
 from helios.core.correlator import CrossDeviceCorrelator
 from helios.core.hasher import hash_file
-from helios.core.snapshot import Snapshot, SnapshotDiff, SnapshotEngine
+from helios.core.snapshot import Snapshot, SnapshotEngine
 from helios.models import (
-    Alert,
-    Confidence,
     DataEvent,
     Device,
     DeviceType,
-    DriveInfo,
-    DriveType,
     EventType,
     FileRecord,
     Investigation,
-    ScanOptions,
-    Severity,
 )
 from helios.utils.ntfs import detect_timestomping
 
@@ -254,8 +245,13 @@ def test_ntfs_timestomping_copy_not_flagged() -> None:
     # Standard file copy: SI and FN created match; SI modification is older than creation
     assert detect_timestomping(created, modified, fn_created, fn_modified) is False
 
-    # Actual timestomping: SI created predates FN created by > 60s
-    si_stomp_created = datetime(2020, 1, 1, 0, 0, 0)
+    # Copy pattern (FN created later than SI) is also not flagged — it is the
+    # normal NTFS copy signature and previously flooded reports with FPs.
+    si_copy_created = datetime(2020, 1, 1, 0, 0, 0)
+    assert detect_timestomping(si_copy_created, modified, fn_created, fn_modified) is False
+
+    # Actual timestomping: SI created forged NEWER than FN created
+    si_stomp_created = datetime(2026, 8, 18, 14, 0, 0)
     assert detect_timestomping(si_stomp_created, modified, fn_created, fn_modified) is True
 
 

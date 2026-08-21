@@ -94,13 +94,18 @@ def test_windows_ntfs_timestomping_heuristic():
     # Legitimate timestamps -> False
     assert detect_timestomping(normal_si_created, normal_si_modified, normal_fn_created, normal_fn_modified) is False
 
-    # Timestomped: SI created altered to 2 years before FN created -> True
-    tampered_si_created = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    # Copy pattern (SI created older than FN created) is NOT flagged — it is
+    # the normal NTFS copy signature, not timestomping.
+    copied_si_created = datetime(2024, 1, 1, 10, 0, 0, tzinfo=timezone.utc)
+    assert detect_timestomping(copied_si_created, normal_si_modified, normal_fn_created, normal_fn_modified) is False
+
+    # Timestomped: SI created forged NEWER than FN created (kernel-impossible) -> True
+    tampered_si_created = datetime(2026, 3, 1, 10, 0, 0, tzinfo=timezone.utc)
     assert detect_timestomping(tampered_si_created, normal_si_modified, normal_fn_created, normal_fn_modified) is True
 
-    # Tampered: SI modified earlier than SI created -> True
+    # SI modified earlier than SI created alone is a copy artifact — not flagged
     impossible_si_modified = datetime(2025, 12, 31, 10, 0, 0, tzinfo=timezone.utc)
-    assert detect_timestomping(normal_si_created, impossible_si_modified, normal_fn_created, normal_fn_modified) is True
+    assert detect_timestomping(normal_si_created, impossible_si_modified, normal_fn_created, normal_fn_modified) is False
 
 
 def test_windows_ntfs_alternate_data_streams():

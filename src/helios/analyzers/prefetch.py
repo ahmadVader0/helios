@@ -9,8 +9,6 @@ from typing import Any
 
 from helios.adapters.ez_tools_adapter import EZToolsAdapter
 from helios.analyzers.base import AnalyzerBase, RawArtifact
-from helios.adapters.ez_tools_adapter import EZToolsAdapter
-from helios.analyzers.base import AnalyzerBase, RawArtifact
 from helios.models import Alert, Confidence, DataEvent, Device, EventType, ScanOptions, Severity
 
 logger = logging.getLogger(__name__)
@@ -148,6 +146,12 @@ class PrefetchAnalyzer(AnalyzerBase):
             List of DataEvents detailing application executions.
         """
         events = []
+
+        if not artifacts:
+            raise RuntimeError(
+                "No Prefetch files collected (Windows\\Prefetch not found on the "
+                "scanned volume, or Prefetch is disabled on the target system)"
+            )
 
         pecmd_by_name = self._run_pecmd_enrichment(artifacts)
 

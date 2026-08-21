@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Any
 
 from rich import box
-from rich.align import Align
 from rich.panel import Panel
 from rich.progress import (
     BarColumn,
@@ -39,7 +38,6 @@ from helios.config import HeliosConfig, load_config
 from helios.devices import detector
 from helios.display import (
     build_banner_panel,
-    build_banner_text,
     console,
     init_windows_console,
     print_devices_table,

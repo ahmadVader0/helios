@@ -114,13 +114,24 @@ def test_detect_timestomping():
     # Normal timestamps: no timestomping
     assert detect_timestomping(si_created, si_modified, fn_created, fn_modified) is False
 
-    # Timestomping: SI created is forged to be 10 days earlier than FN creation
-    forged_si_created = datetime(2023, 12, 20, 12, 0, 0, tzinfo=timezone.utc)
+    # Copy pattern (FN created later than SI created) is NOT timestomping —
+    # this fires on most real volumes and drowned reports in false positives.
+    copied_si_created = datetime(2023, 12, 20, 12, 0, 0, tzinfo=timezone.utc)
+    assert detect_timestomping(copied_si_created, si_modified, fn_created, fn_modified) is False
+
+    # Timestomping: SI created forged NEWER than FN creation — the kernel can
+    # never produce an SI timestamp after its own FN record.
+    forged_si_created = datetime(2024, 1, 5, 12, 0, 0, tzinfo=timezone.utc)
     assert detect_timestomping(forged_si_created, si_modified, fn_created, fn_modified) is True
 
-    # Timestomping: SI modified earlier than SI created (impossible)
+    # Timestomping: whole-second zeroing on SI while FN keeps precision
+    zeroed_si = datetime(2024, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+    precise_fn = datetime(2024, 1, 1, 12, 0, 7, 123456, tzinfo=timezone.utc)
+    assert detect_timestomping(zeroed_si, si_modified, precise_fn, fn_modified) is True
+
+    # SI modified earlier than SI created alone is a normal copy artifact — not flagged
     impossible_modified = datetime(2024, 1, 1, 11, 0, 0, tzinfo=timezone.utc)
-    assert detect_timestomping(si_created, impossible_modified, fn_created, fn_modified) is True
+    assert detect_timestomping(si_created, impossible_modified, fn_created, fn_modified) is False
 
 
 def test_mft_analyzer_with_csv(tmp_path: Path):
@@ -140,10 +151,11 @@ def test_mft_analyzer_with_csv(tmp_path: Path):
             "2024-05-01 10:05:00.0000000", "2024-05-01 10:05:00.0000000",
         ])
         # Row 2: Deleted file with ADS and Timestomping
+        # (SI created forged NEWER than FN created — kernel-impossible)
         writer.writerow([
             "101", "5", "stealth.exe:stream", "Users\\Admin\\Downloads",
             "2048", "False", "False", "True",
-            "2020-01-01 00:00:00.0000000", "2024-05-01 12:00:00.0000000",
+            "2024-05-01 12:00:00.0000000", "2024-05-01 10:00:00.0000000",
             "2024-05-01 12:00:00.0000000", "2024-05-01 12:00:00.0000000",
         ])
 

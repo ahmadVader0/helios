@@ -53,7 +53,7 @@ Profiles are defined in `config/investigation_profiles.yaml`. The report's "Modu
 
 ## Core Features
 
-- **Live filesystem walk** with real SHA-256 hashing (2,000 files/drive cap, warned when hit)
+- **Live filesystem walk** with real SHA-256 hashing (5,000,000 files/drive cap, warned when hit)
 - **USB history** from Windows registry (`USBSTOR` / `MountPoints2`)
 - **Recycle Bin parsing** (RBCmd) for deletions; `$I`-based
 - **LNK / JumpList access** (LECmd / JLECmd)
@@ -109,7 +109,7 @@ tools/                         bundled forensic binaries (EZ tools, adb, chainsa
 ## Development
 
 ```bash
-venv/bin/python -m pytest -q                       # 72 tests
+venv/bin/python -m pytest -q                       # 119 tests
 venv/bin/mypy src/helios                           # strict type checks
 venv/bin/ruff check --select F src/helios tests    # lint (F rules)
 ```
@@ -124,7 +124,7 @@ venv/bin/pyinstaller --clean --noconfirm helios.spec   # -> dist/helios.exe
 
 ## For AI Agents
 
-If you are an AI agent working on this repository, read **`AGENTS.md`** first — it contains the full engineering context, hard guardrails, and verification gates.
+If you are an AI agent working on this repository: run `venv/bin/python -m pytest -q`, `venv/bin/mypy src/helios` and `venv/bin/ruff check --select F src/helios tests` before and after every change — all three must stay green.
 
 ---
 
