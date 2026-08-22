@@ -266,7 +266,6 @@ def menu_new_investigation(config: HeliosConfig) -> None:
     date_from_str = ""
     date_to_str = ""
 
-    labels = {0: "Case info", 1: "Targets", 2: "Profile", 3: "Dates"}
     step = 0
     back_to_summary = False
 
