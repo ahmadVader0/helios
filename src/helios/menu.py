@@ -37,6 +37,7 @@ from rich.table import Table
 from helios.config import HeliosConfig, load_config
 from helios.devices import detector
 from helios.display import (
+    esc_markup,
     build_banner_panel,
     console,
     init_windows_console,
@@ -300,10 +301,10 @@ def menu_new_investigation(config: HeliosConfig) -> None:
                 all_targets.append(("drive", drv))
                 idx = len(all_targets)
                 rem = " [USB Removable]" if drv.is_removable else ""
-                console.print(f"  [[bold gold1]{idx}[/bold gold1]] Drive [bold cyan]{drv.drive_letter}[/cyan] ({drv.label or 'Unlabeled'}) - {drv.filesystem} - {format_size(drv.total_size)}{rem}")
+                console.print(f"  [[bold gold1]{idx}[/bold gold1]] Drive [bold cyan]{esc_markup(drv.drive_letter)}[/bold cyan] ({esc_markup(drv.label or 'Unlabeled')}) - {esc_markup(drv.filesystem)} - {format_size(drv.total_size)}{esc_markup(rem)}")
             for dev in android_devices:
                 all_targets.append(("android", dev))
-                console.print(f"  [[bold gold1]{len(all_targets)}[/bold gold1]] Android [bold green]{dev.device_name}[/green] ({dev.serial_number})")
+                console.print(f"  [[bold gold1]{len(all_targets)}[/bold gold1]] Android [bold green]{dev.device_name}[/bold green] ({dev.serial_number})")
             console.print("  [[bold gold1]A[/bold gold1]] All of the above")
 
             while True:
@@ -406,7 +407,7 @@ def menu_new_investigation(config: HeliosConfig) -> None:
             st.add_row("[2] Targets:", ", ".join(selected_drive_letters) + (", " + ", ".join(d.device_name for d in selected_android) if selected_android else ""))
             st.add_row("[3] Profile:", chosen_profile.upper())
             st.add_row("[4] Dates:", f"{date_from_str or 'Earliest'} to {date_to_str or 'Latest'}")
-            console.print(Panel(st, title="[bold gold1]Scan Parameters[/gold1]", border_style="gold1"))
+            console.print(Panel(st, title="[bold gold1]Scan Parameters[/bold gold1]", border_style="gold1"))
             print_scan_summary(scan_options)
 
             ans = get_safe_input("Press Enter to start, 1-4 to change a setting, C to cancel", default_value="", allow_empty=True)
