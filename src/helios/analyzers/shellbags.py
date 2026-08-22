@@ -94,10 +94,12 @@ class ShellBagsAnalyzer(AnalyzerBase):
         events = []
 
         if not artifacts:
-            raise RuntimeError(
-                "No ShellBag registry hives collected (NTUSER.DAT / UsrClass.dat "
-                "not found or locked — live-system hives may need VSS or an "
-                "offline copy)"
+            from helios.analyzers.base import ModuleSkipped
+
+            raise ModuleSkipped(
+                "No ShellBag registry hives collected (NTUSER.DAT / UsrClass.dat not "
+                "found on the scanned volume, or locked by Windows on a live system — "
+                "offline copies or VSS snapshots are needed for active users)"
             )
 
         if not self.ez_tools.tool_available("sbecmd"):

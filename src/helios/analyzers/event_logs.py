@@ -112,10 +112,12 @@ class EventLogsAnalyzer(AnalyzerBase):
         failed_logons_by_account: dict[str, list[datetime]] = {}
 
         if not artifacts:
-            raise RuntimeError(
-                "No EVTX event logs collected (Windows\\System32\\Winevt\\Logs not "
-                "found on the scanned volume — event-log analysis requires a live "
-                "Windows system drive or provided artifact paths)"
+            from helios.analyzers.base import ModuleSkipped
+
+            raise ModuleSkipped(
+                "No EVTX event logs collected (Windows\\System32\\winevt\\Logs not "
+                "found on the scanned volume — event-log analysis needs the Windows "
+                "system drive, e.g. scan C:/ from WSL or run on Windows natively)"
             )
 
         for artifact in artifacts:

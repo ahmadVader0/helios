@@ -22,6 +22,14 @@ except ImportError:
     ScanOptions = Any  # type: ignore[misc,assignment]
 
 
+class ModuleSkipped(Exception):
+    """Raised by an analyzer when the scanned volume simply has none of the
+    artifacts this module consumes (e.g. no ``Windows\\Prefetch`` on a data
+    drive). This is NOT a malfunction — the pipeline records it as
+    ``skipped`` rather than ``failed`` so reports stay honest without
+    alarming the analyst."""
+
+
 @dataclass
 class RawArtifact:
     """
@@ -29,7 +37,7 @@ class RawArtifact:
 
     Attributes:
         artifact_id (str): A unique identifier for the artifact.
-        artifact_type (str): The category or type of the artifact (e.g., 'registry', 'mft').
+        artifact_type (str): The category or type of the artifact (e.g. 'registry', 'mft').
         source_path (Path): The original file path or location where the artifact was found.
         device_id (str): Identifier for the device from which the artifact was collected.
         collected_at (datetime): The timestamp when the artifact was gathered.

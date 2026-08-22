@@ -46,22 +46,30 @@ class LnkJumpListAnalyzer(AnalyzerBase):
 
     def collect(self, device: Device) -> list[RawArtifact]:
         """
-        Collect LNK files and JumpLists from typical locations.
-        
+        Collect LNK files and JumpLists from typical locations on the SCANNED
+        volume (device.mount_point / drive_letter), falling back to the host
+        system root only when no volume is bound.
+
         Args:
             device: The target Device object representing the system being analyzed.
-            
+
         Returns:
             A list of RawArtifact objects representing collected files or directories.
         """
         artifacts = []
-        
-        # Typical LNK locations for standard Windows profiles
-        # Note: In a real system we would iterate through User profiles
-        system_root = getattr(device, "root_path", None) or Path("C:/")
-        if isinstance(system_root, str):
-            system_root = Path(system_root)
-        
+
+        # Scope the collection to the scanned volume — never assume C:/.
+        if getattr(device, "mount_point", None):
+            system_root = Path(device.mount_point)
+        elif os.name == "nt":
+            drive = str(getattr(device, "drive_letter", "") or os.environ.get("SystemDrive", "C:"))
+            root_text = drive.rstrip("\\")
+            if not root_text.endswith(("/", ":")):
+                root_text += ":"
+            system_root = Path(root_text + "/")
+        else:
+            system_root = Path("/")
+
         user_profiles = [system_root / "Users" / user for user in self._get_users(device, system_root)]
         
         for profile in user_profiles:
@@ -131,9 +139,12 @@ class LnkJumpListAnalyzer(AnalyzerBase):
         events = []
 
         if not artifacts:
-            raise RuntimeError(
+            from helios.analyzers.base import ModuleSkipped
+
+            raise ModuleSkipped(
                 "No LNK/JumpList artifacts collected (no user Recent folders found "
-                "on the scanned volume)"
+                "on the scanned volume — LNK analysis needs a Windows user profile, "
+                "e.g. scan C:/ from WSL or run on Windows natively)"
             )
 
         if not self.ez_tools.tool_available("lecmd"):

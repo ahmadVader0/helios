@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+from helios.analyzers.base import ModuleSkipped
 from helios.config import HeliosConfig, load_config
 from helios.core.investigation import ProfileManager
 from helios.devices import detector
@@ -738,6 +739,16 @@ def run_investigation_pipeline(
                 "alerts": len(alerts_out) - before_a,
                 "files": files_found,
                 "detail": detail,
+            })
+        except ModuleSkipped as exc:
+            # The scanned volume simply doesn't contain this artifact type —
+            # not an error. Recorded distinctly so the report explains WHY
+            # a section is empty without looking like a malfunction.
+            logger.info("Module %s (%s) skipped: %s", key, label, exc)
+            module_results.append({
+                "key": key, "label": label, "status": "skipped",
+                "events": 0, "alerts": 0, "files": 0,
+                "detail": str(exc),
             })
         except Exception as exc:  # noqa: BLE001 - pipeline must never abort
             logger.warning("Module %s (%s) encountered an issue: %s", key, label, exc)

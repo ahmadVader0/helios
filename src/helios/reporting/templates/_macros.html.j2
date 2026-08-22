@@ -139,8 +139,10 @@
                     <span class="badge badge-ok">Ran</span>
                     {% elif m.status == 'failed' %}
                     <span class="badge badge-danger">Failed</span>
+                    {% elif m.status == 'skipped' %}
+                    <span class="badge badge-warn" title="The scanned volume does not contain this artifact type — not an error.">Skipped</span>
                     {% else %}
-                    <span class="badge badge-warn">Disabled / Skipped</span>
+                    <span class="badge badge-gray">Disabled</span>
                     {% endif %}
                 </td>
                 <td>{{ m.events }}</td>

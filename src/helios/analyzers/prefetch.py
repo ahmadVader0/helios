@@ -107,7 +107,8 @@ class PrefetchAnalyzer(AnalyzerBase):
         Returns:
             A list of RawArtifact objects representing Prefetch files.
         """
-        artifacts = []
+        artifacts: list[RawArtifact] = []
+        self.collect_notes: list[str] = []
         if device.mount_point:
             root = Path(device.mount_point)
         elif os.name == "nt":
@@ -115,23 +116,33 @@ class PrefetchAnalyzer(AnalyzerBase):
         else:
             root = Path("/")
         prefetch_dir = root / "Windows" / "Prefetch"
-        
-        if prefetch_dir.exists() and prefetch_dir.is_dir():
+
+        if not prefetch_dir.exists():
+            return artifacts
+
+        try:
             # Match *.pf case-insensitively (Linux filesystems are case-sensitive
             # and real Windows prefetch files can be created as UPPER.PF).
-            try:
-                pf_files = [p for p in prefetch_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pf"]
-                for pf_file in pf_files:
-                    artifacts.append(RawArtifact(
-                        artifact_id=str(uuid.uuid4()),
-                        artifact_type="PrefetchFile",
-                        source_path=pf_file,
-                        device_id=device.device_id,
-                        collected_at=datetime.now(tz=timezone.utc),
-                        metadata={"filename": pf_file.name}
-                    ))
-            except OSError as e:
-                logger.debug("Cannot read Prefetch directory %s: %s", prefetch_dir, e)
+            pf_files = [p for p in prefetch_dir.iterdir() if p.is_file() and p.suffix.lower() == ".pf"]
+            for pf_file in pf_files:
+                artifacts.append(RawArtifact(
+                    artifact_id=str(uuid.uuid4()),
+                    artifact_type="PrefetchFile",
+                    source_path=pf_file,
+                    device_id=device.device_id,
+                    collected_at=datetime.now(tz=timezone.utc),
+                    metadata={"filename": pf_file.name}
+                ))
+        except PermissionError:
+            self.collect_notes.append(
+                f"Prefetch directory exists but is NOT READABLE: {prefetch_dir}. "
+                "On WSL, remount the drive with '-o metadata,uid=<your-uid>' or run Helios "
+                "with elevated rights to read protected Windows folders."
+            )
+            logger.warning("Permission denied reading %s", prefetch_dir)
+        except OSError as e:
+            self.collect_notes.append(f"Cannot read {prefetch_dir}: {e}")
+            logger.debug("Cannot read Prefetch directory %s: %s", prefetch_dir, e)
         return artifacts
 
     def analyze(self, artifacts: list[RawArtifact]) -> list[DataEvent]:
@@ -148,7 +159,12 @@ class PrefetchAnalyzer(AnalyzerBase):
         events = []
 
         if not artifacts:
-            raise RuntimeError(
+            from helios.analyzers.base import ModuleSkipped
+
+            notes = " ".join(getattr(self, "collect_notes", []))
+            if notes:
+                raise ModuleSkipped(f"No Prefetch files collected — {notes}")
+            raise ModuleSkipped(
                 "No Prefetch files collected (Windows\\Prefetch not found on the "
                 "scanned volume, or Prefetch is disabled on the target system)"
             )

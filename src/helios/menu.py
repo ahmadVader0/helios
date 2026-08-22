@@ -696,9 +696,11 @@ def menu_snapshot_manager(config: HeliosConfig) -> None:
             target = drives[int(pick) - 1].drive_letter
 
         snap_name = get_safe_input(
-            "Snapshot Label (Enter for auto timestamp)",
+            "Snapshot Label (Enter for auto timestamp, or 'B' to go back)",
             default_value=f"Snapshot-{datetime.now().strftime('%Y%m%d-%H%M%S')}",
         )
+        if snap_name.upper() == "B":
+            return
         target_path = Path(target)
 
         if not target_path.exists():
@@ -733,15 +735,19 @@ def menu_snapshot_manager(config: HeliosConfig) -> None:
             console.print(f"  [{idx}] {sfile.name}  ({mtime})")
 
         idx1 = prompt_menu_choice(
-            [str(i) for i in range(1, len(existing_snaps) + 1)],
-            prompt_label="Select Baseline Snapshot #",
+            [str(i) for i in range(1, len(existing_snaps) + 1)] + ["B"],
+            prompt_label="Select Baseline Snapshot # (B to go back)",
             breadcrumb="Snapshot Compare",
         )
+        if idx1 == "B":
+            return
         idx2 = prompt_menu_choice(
-            [str(i) for i in range(1, len(existing_snaps) + 1)],
-            prompt_label="Select Comparison Snapshot #",
+            [str(i) for i in range(1, len(existing_snaps) + 1)] + ["B"],
+            prompt_label="Select Comparison Snapshot # (B to go back)",
             breadcrumb="Snapshot Compare",
         )
+        if idx2 == "B":
+            return
 
         try:
             s1 = engine.load_snapshot(existing_snaps[int(idx1) - 1])
@@ -786,8 +792,11 @@ def menu_keyword_search(config: HeliosConfig) -> None:
     console.print("\n[bold yellow]Select a keyword preset:[/bold yellow]")
     for key, (label, _) in presets.items():
         console.print(f"  [{key}] {label}")
+    console.print("  [B] Return to Main Menu")
 
-    preset_choice = prompt_menu_choice(list(presets.keys()), prompt_label="Preset", breadcrumb="Keyword Search")
+    preset_choice = prompt_menu_choice(list(presets.keys()) + ["B"], prompt_label="Preset", breadcrumb="Keyword Search")
+    if preset_choice == "B":
+        return
     if preset_choice == "5":
         keyword_query = get_safe_input("Enter keyword or regex string to search (or 'B' to return)", allow_empty=False)
         if keyword_query.upper() == "B":
@@ -934,7 +943,9 @@ def menu_export_report(config: HeliosConfig) -> None:
     if choice == "B":
         return
 
-    dest_dir_str = get_safe_input("Enter Target Export Directory", default_value="./reports")
+    dest_dir_str = get_safe_input("Enter Target Export Directory (or 'B' to go back)", default_value="./reports")
+    if dest_dir_str.upper() == "B":
+        return
     dest_dir = Path(dest_dir_str)
     dest_dir.mkdir(parents=True, exist_ok=True)
 
@@ -943,7 +954,7 @@ def menu_export_report(config: HeliosConfig) -> None:
 
     inv = Investigation(
         case_name="Export_Package",
-        investigator="Ahmad Forensics",
+        investigator="Unknown Analyst",
         devices=[local_device],
         drives_scanned=drives,
     )
