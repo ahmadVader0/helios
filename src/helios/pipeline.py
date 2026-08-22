@@ -115,6 +115,53 @@ def _usb_history_module(scan_options, device, events: list) -> None:
     events.extend(usb_an.analyze(raw_arts))
 
 
+def _host_system_drive(drv: DriveInfo) -> bool:
+    """True when this drive IS the live host's own system volume.
+
+    Artifact analyzers may fall back to host roots only for this drive;
+    every OTHER scanned volume must be parsed in its own scope so a D: scan
+    never reports the analyst's C:\\Users artifacts.
+    """
+    if os.name == "nt":
+        sys_drive = os.environ.get("SystemDrive", "C:").upper()
+        return str(drv.drive_letter).upper().rstrip("\\") == sys_drive.rstrip(":\\") + ":" or \
+            str(drv.drive_letter).upper().rstrip("\\") == sys_drive.rstrip(":\\")
+    return Path(str(drv.drive_letter)) == Path("/")
+
+
+def _scope_devices(
+    target_drives: list[DriveInfo],
+    drive_devices: dict[str, Device],
+    local_device: Device,
+) -> list[Device]:
+    """Build one artifact-collection Device per scanned drive.
+
+    Non-host volumes get a copy of the device model with ``mount_point`` /
+    ``drive_letter`` bound to the scanned volume, so analyzers enumerate
+    ``<volume>\\Users``, ``<volume>\\Windows\\Prefetch`` … on the evidence
+    drive instead of silently parsing the host system root.
+    """
+    devices: list[Device] = []
+    seen: set[str] = set()
+    from dataclasses import replace as _dc_replace
+
+    for drv in target_drives:
+        key = str(drv.drive_letter)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        base = drive_devices.get(key, local_device)
+        if _host_system_drive(drv):
+            devices.append(base)
+        else:
+            devices.append(_dc_replace(
+                base,
+                drive_letter=key,
+                mount_point=key,
+            ))
+    return devices
+
+
 def _recycle_bin_module(scan_options, device, events: list) -> None:
     """Run Recycle Bin analyzer."""
     from helios.analyzers.recycle_bin import RecycleBinAnalyzer
@@ -123,39 +170,47 @@ def _recycle_bin_module(scan_options, device, events: list) -> None:
     events.extend(rb_an.analyze(raw_arts))
 
 
-def _lnk_jumplist_module(scan_options, device, events: list) -> None:
-    """Run LNK & JumpLists analyzer."""
+def _lnk_jumplist_module(scan_options, devices: list, events: list) -> None:
+    """Run LNK & JumpLists analyzer across every scoped volume."""
     from helios.analyzers.lnk_jumplists import LnkJumpListAnalyzer
     lnk_an = LnkJumpListAnalyzer(config={}, scan_options=scan_options)
-    raw_arts = lnk_an.collect(device)
-    events.extend(lnk_an.analyze(raw_arts))
+    collected: list = []
+    for dev in devices:
+        collected.extend(lnk_an.collect(dev))
+    events.extend(lnk_an.analyze(collected))
 
 
-def _event_logs_module(scan_options, device, events: list, alerts: list) -> None:
-    """Run Windows Event Logs analyzer."""
+def _event_logs_module(scan_options, devices: list, events: list, alerts: list) -> None:
+    """Run Windows Event Logs analyzer across every scoped volume."""
     from helios.analyzers.event_logs import EventLogsAnalyzer
     evl_an = EventLogsAnalyzer(config={}, scan_options=scan_options)
-    raw_arts = evl_an.collect(device)
-    events.extend(evl_an.analyze(raw_arts))
+    collected: list = []
+    for dev in devices:
+        collected.extend(evl_an.collect(dev))
+    events.extend(evl_an.analyze(collected))
     alerts.extend(evl_an.alerts)
 
 
-def _prefetch_module(scan_options, device, events: list, alerts: list | None = None) -> None:
-    """Run Prefetch execution analyzer."""
+def _prefetch_module(scan_options, devices: list, events: list, alerts: list | None = None) -> None:
+    """Run Prefetch execution analyzer across every scoped volume."""
     from helios.analyzers.prefetch import PrefetchAnalyzer
     pf_an = PrefetchAnalyzer(config={}, scan_options=scan_options)
-    raw_arts = pf_an.collect(device)
-    events.extend(pf_an.analyze(raw_arts))
+    collected: list = []
+    for dev in devices:
+        collected.extend(pf_an.collect(dev))
+    events.extend(pf_an.analyze(collected))
     if alerts is not None:
         alerts.extend(pf_an.alerts)
 
 
-def _shellbags_module(scan_options, device, events: list, alerts: list | None = None) -> None:
-    """Run ShellBags analyzer."""
+def _shellbags_module(scan_options, devices: list, events: list, alerts: list | None = None) -> None:
+    """Run ShellBags analyzer across every scoped volume."""
     from helios.analyzers.shellbags import ShellBagsAnalyzer
     sb_an = ShellBagsAnalyzer(config={}, scan_options=scan_options)
-    raw_arts = sb_an.collect(device)
-    events.extend(sb_an.analyze(raw_arts))
+    collected: list = []
+    for dev in devices:
+        collected.extend(sb_an.collect(dev))
+    events.extend(sb_an.analyze(collected))
     if alerts is not None:
         alerts.extend(sb_an.alerts)
 
@@ -430,6 +485,8 @@ def _correlator_module(case_name, investigator, device_list, target_drives, even
     correlator = CrossDeviceCorrelator(temp_inv)
     corr_events = correlator.detect_usb_transfers()
     events.extend(corr_events)
+    historical = correlator.infer_historical_transfers()
+    events.extend(historical)
     exfil_alerts = correlator.detect_exfiltration_patterns()
     alerts.extend(exfil_alerts)
 
@@ -453,9 +510,9 @@ def _correlator_module(case_name, investigator, device_list, target_drives, even
         "key": "movement_chains",
         "label": "Data Movement Chains",
         "status": "ran",
-        "events": len(corr_events),
+        "events": len(corr_events) + len(historical),
         "alerts": len(exfil_alerts),
-        "detail": f"{len(chains)} movement chain(s) built",
+        "detail": f"{len(chains)} hash chain(s), {len(historical)} historic transfer(s) inferred",
     })
 
 
@@ -512,6 +569,7 @@ def _run_walk(
                     # - Linux: st_ctime is inode CHANGE time (metadata mod),
                     #   NOT creation. Use st_birthtime (Python 3.12+) if
                     #   available, else approximate as min(st_ctime, st_mtime).
+                    approximated_creation = False
                     if os.name == "nt":
                         c_time = datetime.fromtimestamp(st.st_ctime, tz=timezone.utc)
                     else:
@@ -521,6 +579,7 @@ def _run_walk(
                         else:
                             # Best approximation: the earlier of inode-change
                             # and last-modify is closest to the real creation.
+                            approximated_creation = True
                             c_time = datetime.fromtimestamp(
                                 min(st.st_ctime, st.st_mtime), tz=timezone.utc
                             )
@@ -544,18 +603,27 @@ def _run_walk(
                     # FILE_ACCESS is NOT emitted from filesystem st_atime because stat/read
                     # updates atime during scans; genuine file access events are derived
                     # from forensic artifacts (LNK shortcuts, JumpLists, ShellBags, Prefetch).
-                    events.append(
-                        DataEvent(
-                            timestamp=c_time,
-                            event_type=EventType.FILE_CREATE,
-                            source_device=device_id,
-                            source_path=str(p),
-                            file_size=st.st_size,
-                            file_hash=file_hash or None,
-                            confidence=Confidence.HIGH,
-                            raw_source="Live Filesystem Scanner",
+                    #
+                    # Honesty rule: when creation had to be approximated AND it equals
+                    # mtime, there is no independent creation signal — emitting a
+                    # FILE_CREATE would fabricate an event, so only the record is kept.
+                    if not (approximated_creation and c_time == m_time):
+                        create_meta = (
+                            {"creation_approximated": True} if approximated_creation else {}
                         )
-                    )
+                        events.append(
+                            DataEvent(
+                                timestamp=c_time,
+                                event_type=EventType.FILE_CREATE,
+                                source_device=device_id,
+                                source_path=str(p),
+                                file_size=st.st_size,
+                                file_hash=file_hash or None,
+                                confidence=Confidence.HIGH if not approximated_creation else Confidence.MEDIUM,
+                                raw_source="Live Filesystem Scanner",
+                                metadata=create_meta,
+                            )
+                        )
                     if m_time != c_time:
                         events.append(
                             DataEvent(
@@ -716,6 +784,11 @@ def run_investigation_pipeline(
         d.device_id: d.device_type.value for d in device_list
     }
 
+    # One artifact-collection scope per scanned volume so analyzers parse
+    # the evidence drive's own Users/Prefetch/Winevt directories instead of
+    # silently falling back to the host system root.
+    artifact_scope = _scope_devices(target_drives, drive_devices, local_device)
+
     # 1. Live filesystem walk
     walk_capped = _run_walk(target_drives, drive_devices, file_records, events, on_progress)
 
@@ -728,13 +801,13 @@ def run_investigation_pipeline(
     _run_module("file_deletions", "Recycle Bin Analyzer", events, alerts,
                 lambda: _recycle_bin_module(scan_options, local_device, events))
     _run_module("recent_file_access", "LNK & JumpLists Analyzer", events, alerts,
-                lambda: _lnk_jumplist_module(scan_options, local_device, events))
+                lambda: _lnk_jumplist_module(scan_options, artifact_scope, events))
     _run_module("event_logs", "Event Logs Analyzer", events, alerts,
-                lambda: _event_logs_module(scan_options, local_device, events, alerts))
+                lambda: _event_logs_module(scan_options, artifact_scope, events, alerts))
     _run_module("program_execution", "Prefetch Execution Analyzer", events, alerts,
-                lambda: _prefetch_module(scan_options, local_device, events, alerts))
+                lambda: _prefetch_module(scan_options, artifact_scope, events, alerts))
     _run_module("shellbags", "ShellBags Analyzer", events, alerts,
-                lambda: _shellbags_module(scan_options, local_device, events, alerts))
+                lambda: _shellbags_module(scan_options, artifact_scope, events, alerts))
 
     # Resolve report directory early so MFT/USN modules write to the
     # investigation output directory rather than the process CWD.

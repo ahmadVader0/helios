@@ -1,15 +1,16 @@
 {% extends "_base.html.j2" %}
-{% from "_macros.html.j2" import metric_card, events_table, key_findings_card, devices_card, module_exec_card, alerts_panel_card, evidence_panel_card with context %}
+{% from "_macros.html.j2" import metric_card, key_findings_card, devices_card, module_exec_card, alerts_panel_card, evidence_panel_card, rules_appendix, events_explorer, usb_devices_card, prefetch_programs_card, logon_summary_card, shellbag_users_card with context %}
 
 {% block report_title %}Helios Full Forensic Report — {{ investigation.case_name }}{% endblock %}
 
 {% block profile_label %}Full System Forensics{% endblock %}
-{% block brand_sub %}All modules: transfers, deletions, access, execution, logs & suspicious activity{% endblock %}
+{% block brand_sub %}{% if profile_description %}{{ profile_description }}{% else %}All modules: transfers, deletions, access, execution, logs &amp; suspicious activity{% endif %}{% endblock %}
 
 {% block tabs_html %}
 <button class="tab active" data-panel="tab-summary">Summary</button>
 {% if sections.data_movement %}<button class="tab" data-panel="tab-movement">Data Movement</button>{% endif %}
-<button class="tab" data-panel="tab-timeline">Timeline</button>
+<button class="tab" data-panel="tab-timeline">Timeline &amp; Events</button>
+<button class="tab" data-panel="tab-artifacts">System Artifacts</button>
 <button class="tab" data-panel="tab-alerts">Alerts</button>
 <button class="tab" data-panel="tab-evidence">Evidence</button>
 {% endblock %}
@@ -19,11 +20,14 @@
 <!-- ================= SUMMARY ================= -->
 <div id="tab-summary" class="panel active">
     <h2 class="section-title">Executive Summary</h2>
-    <p class="section-desc">Scope and key findings of the full forensic investigation.</p>
+    <p class="section-desc">
+        {% if profile_description %}<strong>Scope:</strong> {{ profile_description }} —{% endif %}
+        key figures from this investigation. Click any card to drill into its section.
+    </p>
 
     <div class="metric-row">
         {{ metric_card(investigation.file_records | length, "Files Indexed", "tab-summary", "sec-devices", "View scanned devices") }}
-        {{ metric_card(investigation.events | length, "Forensic Events", "tab-timeline", "sec-timeline", "View timeline & events") }}
+        {{ metric_card(investigation.events | length, "Forensic Events", "tab-timeline", "sec-explorer", "Explore all events") }}
         {{ metric_card(investigation.alerts | length, "Alerts Raised", "tab-alerts", "sec-alerts", "View alerts", "warn") }}
         {% if sections.deletions %}
         {{ metric_card(deletions | length, "Deleted Files", "tab-movement", "sec-deletions", "View deletions", "danger") }}
@@ -46,118 +50,21 @@
         {% endif %}
     </div>
 
+    {{ key_findings_card() }}
+    {{ devices_card() }}
+    {{ module_exec_card() }}
+
+    {% if event_type_counts %}
     <div class="card">
-        <h3>Key Findings</h3>
-        {% if top_alerts %}
-        <ul class="findings">
-            {% for alert in top_alerts %}
-            {% set sev = alert.severity.value if alert.severity is defined and alert.severity is not none and alert.severity.value is defined else alert.severity %}
-            <li>
-                <span class="sev-badge sev-{{ sev | lower }}">{{ sev | upper }}</span>
-                <span style="min-width: 0;">
-                    <strong>{{ alert.title }}</strong> — {{ alert.description }}
-                    {% if alert.evidence %}
-                    <br><small style="color: var(--muted);">
-                        {% set paths = [] %}
-                        {% for e in alert.evidence %}
-                            {% if e is string and ('\\' in e or '/' in e) %}{% if paths.append(e) %}{% endif %}{% endif %}
-                        {% endfor %}
-                        {% if paths %}Artifact: <code>{{ paths[0] }}</code>{% else %}Artifact: <code>{{ alert.evidence | join('; ') }}</code>{% endif %}
-                    </small>
-                    {% endif %}
-                </span>
-            </li>
+        <h3>Collected Evidence by Event Type</h3>
+        <p class="section-desc">Click a type to open it pre-filtered in the Event Explorer.</p>
+        <div class="type-chips">
+            {% for t, n in event_type_counts | dictsort(by='value') | reverse %}
+            <button class="chip" onclick="switchTabTo('tab-timeline'); heliosFilterEvents({type: '{{ t }}'});">{{ t }}<span class="n">{{ n }}</span></button>
             {% endfor %}
-        </ul>
-        {% else %}
-        <p class="empty-state">No alerts raised during this investigation.</p>
-        {% endif %}
+        </div>
     </div>
-
-    <div class="card" id="sec-devices">
-        <h3>Scanned Devices &amp; Volumes</h3>
-        {% if drives %}
-        <table class="report-table dev-table">
-            <thead>
-                <tr>
-                    <th>Volume</th>
-                    <th>Label</th>
-                    <th>Filesystem</th>
-                    <th class="size-nowrap">Total Size</th>
-                    <th class="size-nowrap">Free Space</th>
-                    <th>Type</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for drv in drives %}
-                <tr>
-                    <td><strong>{{ drv.drive_letter }}</strong></td>
-                    <td>{{ drv.label or 'System Volume' }}</td>
-                    <td><code>{{ drv.filesystem or 'NTFS' }}</code></td>
-                    <td>{{ (drv.total_size / (1024**3)) | round(2) }} GB</td>
-                    <td>{{ (drv.free_space / (1024**3)) | round(2) }} GB</td>
-                    <td>
-                        {% if drv.is_removable %}
-                        <span class="badge badge-warn">USB Removable</span>
-                        {% else %}
-                        <span class="badge badge-ok">Fixed</span>
-                        {% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% else %}
-        <p class="empty-state">No volume data recorded.</p>
-        {% endif %}
-    </div>
-
-    <div class="card">
-        <h3>Investigation Profile &amp; Module Execution</h3>
-        <p class="section-desc">
-            Profile: <strong>{{ investigation.profile_name or 'full' | upper }}</strong>
-            {% if investigation.profile_name %}
-                — the modules below reflect what the selected profile actually ran during this scan.
-            {% endif %}
-        </p>
-        {% if investigation.module_results %}
-        <table class="report-table">
-            <thead>
-                <tr>
-                    <th>Module</th>
-                    <th>Status</th>
-                    <th>Events</th>
-                    <th>Alerts</th>
-                    <th>Detail</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for m in investigation.module_results %}
-                <tr>
-                    <td><strong>{{ m.label }}</strong></td>
-                    <td>
-                        {% if m.status == 'ran' %}
-                        <span class="badge badge-ok">Ran</span>
-                        {% elif m.status == 'failed' %}
-                        <span class="badge badge-danger">Failed</span>
-                        {% else %}
-                        <span class="badge badge-warn">Disabled / Skipped</span>
-                        {% endif %}
-                    </td>
-                    <td>{{ m.events }}</td>
-                    <td>{{ m.alerts }}</td>
-                    <td style="color: var(--muted);">
-                        {% if m.status == 'failed' %}<code>{{ m.detail }}</code>
-                        {% else %}{{ m.detail or '—' }}{% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% else %}
-        <p class="empty-state">No module execution log recorded for this investigation.</p>
-        {% endif %}
-    </div>
+    {% endif %}
 </div>
 
 <!-- ================= DATA MOVEMENT ================= -->
@@ -206,7 +113,7 @@
             </tbody>
         </table>
         {% else %}
-        <p class="empty-state">No file transfers detected. Transfers are only reported when the same file hash appears on two different devices (e.g. PC and a USB drive that was attached during the scan).</p>
+        <p class="empty-state">No file transfers detected. Transfers are reported when the same hash appears on two devices, or when LNK/USB artifacts prove a historic copy to removable media.</p>
         {% endif %}
     </div>
     {% endif %}
@@ -273,10 +180,10 @@
 </div>
 {% endif %}
 
-<!-- ================= TIMELINE ================= -->
+<!-- ================= TIMELINE & EVENTS ================= -->
 <div id="tab-timeline" class="panel">
-    <h2 class="section-title">Timeline &amp; Activity</h2>
-    <p class="section-desc">Event distribution, 24x7 activity, and the full chronological event list.</p>
+    <h2 class="section-title">Timeline &amp; Events</h2>
+    <p class="section-desc">Event distribution over time, 24x7 activity pattern, and the fully searchable event index.</p>
 
     <div class="chart-grid">
         <div class="card" id="sec-timeline">
@@ -289,66 +196,80 @@
         </div>
     </div>
 
-    <div class="card">
-        <h3>Event Log</h3>
-        <p class="section-desc">Every collected event in chronological order.</p>
-        {{ events_table(timeline_rows) }}
-    </div>
+    {{ events_explorer() }}
+</div>
+
+<!-- ================= SYSTEM ARTIFACTS ================= -->
+<div id="tab-artifacts" class="panel">
+    <h2 class="section-title">System Artifacts</h2>
+    <p class="section-desc">Parsed per-source views: program execution, known USB devices, account logons and folder browsing history.</p>
+
+    {{ prefetch_programs_card() }}
+    {{ usb_devices_card() }}
+    {{ logon_summary_card() }}
+    {{ shellbag_users_card() }}
+
+    {% if not prefetch_programs and not usb_device_rows and not logon_summary and not shellbag_users %}
+    <div class="card"><p class="empty-state">No system artifact tables were populated by this scan (see Module Execution on the Summary tab).</p></div>
+    {% endif %}
 </div>
 
 <!-- ================= ALERTS ================= -->
 <div id="tab-alerts" class="panel">
     <h2 class="section-title">Security Alerts</h2>
     <p class="section-desc">Anomalies and exfiltration indicators detected by the analysis engine.</p>
-    <div class="card" id="sec-alerts">
-        {% if investigation.alerts %}
-        {{ alerts_table_html | safe }}
-        {% else %}
-        <p class="empty-state">No alerts raised during this investigation.</p>
-        {% endif %}
-    </div>
+    {{ alerts_panel_card() }}
+    {{ rules_appendix() }}
 </div>
 
 <!-- ================= EVIDENCE ================= -->
 <div id="tab-evidence" class="panel">
     <h2 class="section-title">Evidence &amp; Chain of Custody</h2>
-    <p class="section-desc">Case identification and the audit log of every tool action taken.</p>
-
-    <div class="card">
-        <h3>Case Identification</h3>
-        <table class="report-table">
-            <tbody>
-                <tr><td style="width: 200px;">Case Reference</td><td><strong>{{ investigation.case_name }}</strong> (<code>{{ investigation.case_id }}</code>)</td></tr>
-                <tr><td>Lead Investigator</td><td>{{ investigation.investigator or 'Ahmad Forensics' }}</td></tr>
-                <tr><td>Report Generated</td><td>{{ generated_at }}</td></tr>
-                <tr><td>Scanned Targets</td><td>{% for d in drives %}{{ d.drive_letter }} ({{ d.label or 'Volume' }}, {{ d.filesystem }}){% if not loop.last %}; {% endif %}{% else %}—{% endfor %}</td></tr>
-            </tbody>
-        </table>
-    </div>
-
-    <div class="card">
-        <h3>Chain of Custody Audit Log</h3>
-        {% if investigation.chain_of_custody %}
-        <div class="custody-log">
-            {% for entry in investigation.chain_of_custody %}
-            <div>[{{ entry.timestamp }}] <strong>{{ entry.action }}</strong> — Target: {{ entry.target }} | Result: {{ entry.result }} (Tool: {{ entry.tool_name }})</div>
-            {% endfor %}
-        </div>
-        {% else %}
-        <p class="empty-state">[{{ generated_at }}] Case initialized by {{ investigation.investigator or 'Ahmad Forensics' }}. No additional custody entries recorded.</p>
-        {% endif %}
-    </div>
-
-    <div class="card">
-        <h3>Evidence Package</h3>
-        <p style="font-size: 13px; color: var(--muted);">
-            The full dataset (events, alerts, file records, correlations) is exported alongside this report
-            as JSON and CSV, and packaged into a tamper-evident ZIP with SHA-256 integrity verification
-            (see <code>exports/</code> and the chain-of-custody JSON in the case output directory).
-        </p>
-    </div>
+    <p class="section-desc">Case identification, audit log of every tool action, and downloadable exports.</p>
+    {{ evidence_panel_card() }}
 </div>
 
+<script>
+    /* Full event index for the client-side Event Explorer */
+    window.HELIOS_EVENTS = {{ events_payload | tojson }};
+</script>
+<script type="application/json" id="helios-days">{{ activity_by_day | tojson }}</script>
+{% endblock %}
+
+{% block extra_js %}
+/* Interactive activity-by-day bar: click a day to filter the explorer */
+document.addEventListener('DOMContentLoaded', function () {
+    const el = document.getElementById('explorerDayChart');
+    if (!el) return;
+    let days = [];
+    try { days = JSON.parse(document.getElementById('helios-days').textContent); } catch (e) { return; }
+    if (!days.length) return;
+    const cats = days.map(d => d.date);
+    new ApexCharts(el, {
+        chart: {
+            type: 'bar', height: 190, toolbar: { show: false },
+            events: {
+                dataPointSelection: (_e, _ctx, cfg) => {
+                    const d = cats[cfg.dataPointIndex];
+                    if (d) window.heliosFilterEvents({ from: d, to: d });
+                }
+            }
+        },
+        series: [{ name: 'events', data: days.map(d => d.count) }],
+        xaxis: { categories: cats, labels: { show: false, rotate: 0 }, axisBorder: { show: false }, axisTicks: { show: false } },
+        yaxis: { labels: { style: { fontSize: '11px' } } },
+        dataLabels: { enabled: false },
+        colors: ['#1d4ed8'],
+        tooltip: { x: { show: true } },
+        title: { text: 'Click a bar to filter that day', style: { fontSize: '12px', fontWeight: 400, color: '#6b7280' } }
+    }).render();
+});
+
+function switchTabTo(panelId) {
+    document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.panel === panelId));
+    document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === panelId));
+    setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
+}
 {% endblock %}
 
 {% block charts_js %}

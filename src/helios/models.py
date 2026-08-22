@@ -285,6 +285,8 @@ class Alert:
     device: str = ""
     timestamp: datetime | None = None
     confidence: Confidence = Confidence.MEDIUM
+    rule_id: str = ""
+    rule_name: str = ""
 
     def __post_init__(self) -> None:
         """Ensure alert timestamp is UTC-aware."""
@@ -302,6 +304,8 @@ class Alert:
             "device": self.device,
             "timestamp": self.timestamp.isoformat() if self.timestamp else None,
             "confidence": self.confidence.value,
+            "rule_id": self.rule_id,
+            "rule_name": self.rule_name,
         }
 
     @classmethod

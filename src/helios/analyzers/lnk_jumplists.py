@@ -7,7 +7,7 @@ from typing import Any
 
 from helios.adapters.ez_tools_adapter import EZToolsAdapter
 from helios.analyzers.base import AnalyzerBase, RawArtifact
-from helios.models import DataEvent, Device, EventType, ScanOptions
+from helios.models import Confidence, DataEvent, Device, EventType, ScanOptions
 
 logger = logging.getLogger(__name__)
 
@@ -166,118 +166,152 @@ class LnkJumpListAnalyzer(AnalyzerBase):
         return events
 
     def _process_lnk_records(self, records: list[dict[str, Any]], source_path: str, source_device: str) -> list[DataEvent]:
-        """Process raw records from LECmd into DataEvent objects."""
+        """Process raw records from LECmd into DataEvent objects.
+
+        Timestamp honesty rules:
+        - Only TARGET times from the LNK header are used (they describe the
+          file that was accessed). The ``Source*`` columns describe the .lnk
+          artifact file itself and are NOT evidence of target activity —
+          records without any target time are skipped rather than stamped
+          with the artifact's own (often scan-day) MAC times.
+        - Records with no LocalPath/NetworkPath are skipped so the collected
+          container directory never masquerades as an accessed file.
+        """
         events = []
         for rec in records:
             # Extract basic LNK data
             target = rec.get("LocalPath", "") or rec.get("NetworkPath", "")
+            if not target:
+                continue  # container-path rows are noise, not access evidence
+
             vol_serial = rec.get("VolumeSerialNumber", "")
             drive_type_str = str(rec.get("DriveType", ""))
-            
+
             # Map known drive types to our constants if needed, LECmd outputs text usually like "Removable" or "Fixed"
             is_removable = (
-                "removable" in drive_type_str.lower() or 
+                "removable" in drive_type_str.lower() or
                 drive_type_str == _LnkDriveType.REMOVABLE
             )
-            
+
             creation_time = self._parse_timestamp(
-                rec.get("TargetCreated")
-                or rec.get("TargetCreationTime")
-                or rec.get("SourceCreated")
+                rec.get("TargetCreated") or rec.get("TargetCreationTime")
             )
             modification_time = self._parse_timestamp(
-                rec.get("TargetModified")
-                or rec.get("TargetModificationTime")
-                or rec.get("SourceModified")
+                rec.get("TargetModified") or rec.get("TargetModificationTime")
             )
             access_time = self._parse_timestamp(
-                rec.get("TargetAccessed")
-                or rec.get("TargetAccessTime")
-                or rec.get("SourceAccessed")
+                rec.get("TargetAccessed") or rec.get("TargetAccessTime")
             )
-            
-            # LNK creation time itself usually denotes first time the file was accessed via shortcut
-            lnk_creation = self._parse_timestamp(
-                rec.get("SourceCreated") or rec.get("SourceCreationTime")
-            )
-            
-            timestamp = access_time or lnk_creation or modification_time or creation_time
-            if timestamp is None:
-                logger.debug("No timestamp in LECmd record; skipping %s", rec.get("SourceFile", ""))
+
+            if access_time is not None:
+                timestamp, basis, confidence = (
+                    access_time, "target_accessed", Confidence.HIGH,
+                )
+            elif modification_time is not None:
+                timestamp, basis, confidence = (
+                    modification_time, "target_modified", Confidence.MEDIUM,
+                )
+            elif creation_time is not None:
+                timestamp, basis, confidence = (
+                    creation_time, "target_created", Confidence.MEDIUM,
+                )
+            else:
+                logger.debug(
+                    "LNK record has no target timestamps; skipping %s",
+                    rec.get("SourceFile", ""),
+                )
                 continue
-                
+
             metadata = {
                 "source_file": rec.get("SourceFile", ""),
                 "target_path": target,
+                "timestamp_basis": basis,
                 "target_creation_time": creation_time.isoformat() if creation_time else None,
                 "target_modification_time": modification_time.isoformat() if modification_time else None,
                 "volume_serial": vol_serial,
                 "drive_type": drive_type_str,
                 "tracker": "LECmd"
             }
-            
+
             if is_removable:
                 metadata["removable_media_flag"] = True
-                
+
             event = DataEvent(
                 timestamp=timestamp,
                 event_type=EventType.FILE_ACCESS,
                 source_device=source_device,
-                source_path=target or source_path,
+                source_path=target,
                 raw_source="LECmd",
+                confidence=confidence,
                 metadata=metadata
             )
             events.append(event)
-            
+
         return events
 
     def _process_jumplist_records(self, records: list[dict[str, Any]], source_path: str, source_device: str) -> list[DataEvent]:
-        """Process raw records from JLECmd into DataEvent objects."""
+        """Process raw records from JLECmd into DataEvent objects.
+
+        Honesty rules (same rationale as LNK processing): the JumpList
+        container's own ``LastModified``/``LastAccess``/``Source*`` times are
+        rewritten by Windows on every Explorer launch and describe the
+        container file — using them stamps thousands of events with the
+        artifact-refresh time. Only target-derived timestamps are kept.
+        """
         events = []
         for rec in records:
             target = rec.get("LocalPath", "") or rec.get("NetworkPath", "")
+            if not target:
+                continue  # skip container-path rows
+
             app_id = rec.get("AppIdDescription", "") or rec.get("AppId", "")
             vol_serial = rec.get("VolumeSerialNumber", "")
             drive_type_str = str(rec.get("DriveType", ""))
-            
+
             is_removable = "removable" in drive_type_str.lower()
-            
+
             access_time = self._parse_timestamp(
-                rec.get("TargetAccessed")
-                or rec.get("TargetAccessTime")
-                or rec.get("LastModified")
-                or rec.get("LastAccess")
-                or rec.get("SourceAccessed")
-                or rec.get("SourceCreated")
-                or rec.get("TargetModified")
+                rec.get("TargetAccessed") or rec.get("TargetAccessTime")
             )
-            
-            if access_time is None:
-                logger.debug("No timestamp in JLECmd record; skipping %s", rec.get("SourceFile", ""))
+            modified_time = self._parse_timestamp(rec.get("TargetModified"))
+
+            if access_time is not None:
+                timestamp, basis, confidence = (
+                    access_time, "target_accessed", Confidence.HIGH,
+                )
+            elif modified_time is not None:
+                timestamp, basis, confidence = (
+                    modified_time, "target_modified", Confidence.MEDIUM,
+                )
+            else:
+                logger.debug(
+                    "No target timestamp in JLECmd record; skipping %s",
+                    rec.get("SourceFile", ""),
+                )
                 continue
-                
+
             metadata = {
                 "source_file": rec.get("SourceFile", ""),
                 "app_id": app_id,
+                "timestamp_basis": basis,
                 "volume_serial": vol_serial,
                 "drive_type": drive_type_str,
                 "tracker": "JLECmd",
                 "target_path": target
             }
-            
+
             if is_removable:
                 metadata["removable_media_flag"] = True
-                
+
             event = DataEvent(
-                timestamp=access_time,
+                timestamp=timestamp,
                 event_type=EventType.FILE_ACCESS,
                 source_device=source_device,
-                # Show the accessed target when known; the jumplist file
-                # itself is only the source artifact.
-                source_path=target or str(source_path),
+                source_path=target,
                 raw_source="JLECmd",
+                confidence=confidence,
                 metadata=metadata
             )
             events.append(event)
-            
+
         return events

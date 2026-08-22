@@ -145,10 +145,49 @@ class SuspiciousDetectorAnalyzer(AnalyzerBase):
             with open(rules_path, "r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
             # Real rules files wrap entries under a top-level "rules" key
-            return self._normalize_rules(data.get("rules", data) if isinstance(data, dict) else {})
+            raw_rules = data.get("rules", data) if isinstance(data, dict) else {}
+            # Keep rule provenance (RULE-xxx id + display name) per internal
+            # key so alerts can cite which configured detection produced them.
+            self.rule_meta: dict[str, dict[str, str]] = {}
+            for rule_name, body in raw_rules.items():
+                if isinstance(body, dict):
+                    internal = RULE_NAME_MAP.get(rule_name)
+                    if internal:
+                        self.rule_meta[internal] = {
+                            "id": str(body.get("id", "") or ""),
+                            "name": str(body.get("name", "") or ""),
+                        }
+            return self._normalize_rules(raw_rules)
         except Exception as e:
             logger.error("Failed to load rules: %s", e)
             return {}
+
+    _TITLE_RULE_MAP: dict[str, str] = {
+        "Executable or Script on USB Drive": "usb_executables",
+        "Double Extension Detected": "double_extensions",
+        "Executable or Script in User-Content Folder": "executables_in_content_dirs",
+        "Script Extension Masks a Compiled Binary": "script_binary_disguise",
+        "Script File Outside System Directories": "scripts_outside_system_dirs",
+        "Hidden File in Non-Standard Location": "hidden_unusual",
+        "Large Archive in Temporary Directory": "large_archives",
+        "Password-Protected Archive": "password_archives",
+        "Autorun Configuration File on USB": "autorun_files",
+        "Encrypted Container Detected": "crypto_containers",
+        "Mass File Deletion Detected": "mass_deletion",
+        "USB Connection Outside Working Hours": "after_hours_usb",
+    }
+
+    def apply_rule_provenance(self, alerts: list) -> None:
+        """Stamp each alert with the RULE-xxx id/name from the YAML config."""
+        for alert in alerts:
+            if not isinstance(alert, Alert):
+                continue
+            if alert.rule_id:
+                continue
+            meta = getattr(self, "rule_meta", {}).get(self._TITLE_RULE_MAP.get(alert.title, ""), {})
+            if meta:
+                alert.rule_id = meta.get("id", "")
+                alert.rule_name = meta.get("name", "")
 
     @staticmethod
     def _normalize_rules(rules: dict[str, Any]) -> dict[str, Any]:
@@ -394,6 +433,7 @@ class SuspiciousDetectorAnalyzer(AnalyzerBase):
                         confidence=Confidence.HIGH
                     ))
 
+        self.apply_rule_provenance(alerts)
         return alerts
 
     def analyze_events(
@@ -501,6 +541,7 @@ class SuspiciousDetectorAnalyzer(AnalyzerBase):
                         confidence=Confidence.MEDIUM,
                     ))
 
+        self.apply_rule_provenance(alerts)
         return alerts
 
 

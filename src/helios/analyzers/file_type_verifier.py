@@ -138,6 +138,12 @@ class FileTypeVerifierAnalyzer(AnalyzerBase):
         if pending:
             self._verify_batch_with_exiftool(alerts, pending)
 
+        # RULE-009 provenance (extension mismatch is enforced here)
+        for alert in alerts:
+            if getattr(alert, "title", "") == "File Extension Mismatch" and not alert.rule_id:
+                alert.rule_id = "RULE-009"
+                alert.rule_name = "Extension Mismatch"
+
         return alerts
 
     def _verify_batch_with_exiftool(self, alerts: list[Any], pending: list[tuple[Any, str]]) -> None:

@@ -81,6 +81,16 @@ class UsbHistoryAnalyzer(AnalyzerBase):
             except Exception as e:
                 logger.debug("Failed to glob NTUSER.DAT files: %s", e)
 
+        # Auto-discover offline Windows artifacts under every scanned volume
+        # (WSL/drvfs or mounted evidence drives): <mount>/Windows/... This
+        # is what makes USB history work when scanning D: from WSL instead
+        # of silently finding nothing.
+        if hasattr(self, "scan_options") and self.scan_options and self.scan_options.drives:
+            for d in self.scan_options.drives:
+                base = Path(d)
+                target_paths.append(base / "Windows" / "System32" / "config" / "SYSTEM")
+                target_paths.append(base / "Windows" / "inf" / "setupapi.dev.log")
+
         # If paths are provided in scan options, look for registry files there
         if hasattr(self, "scan_options") and self.scan_options and self.scan_options.paths:
             for base_path in self.scan_options.paths:
@@ -97,6 +107,18 @@ class UsbHistoryAnalyzer(AnalyzerBase):
         if os.name != "nt":
             target_paths.append(Path("/tmp/setupapi.dev.log"))
             target_paths.append(Path("/tmp/SYSTEM"))
+
+        seen_paths: set[str] = set()
+        unique_paths: list[Path] = []
+        for tp in target_paths:
+            try:
+                key = str(tp.resolve()).lower()
+            except OSError:
+                key = str(tp).lower()
+            if key not in seen_paths:
+                seen_paths.add(key)
+                unique_paths.append(tp)
+        target_paths = unique_paths
 
         for path in target_paths:
             try:
@@ -396,10 +418,12 @@ class UsbHistoryAnalyzer(AnalyzerBase):
                 content = f.readlines()
 
             current_device: dict[str, Any] | None = None
+            current_delete: dict[str, Any] | None = None
 
             for line in content:
                 line = line.strip()
                 if line.startswith(">>>  [Device Install"):
+                    current_delete = None
                     current_device = {}
                     if "-" in line:
                         parts = line.split("-")
@@ -409,7 +433,18 @@ class UsbHistoryAnalyzer(AnalyzerBase):
                             # network adapter, software devices, ...)
                             if "usb\\" in hw_id.lower():
                                 current_device["hw_id"] = hw_id
-                elif line.startswith(">>>  Section start") and current_device is not None:
+                elif line.startswith(">>>  [Device Delete"):
+                    # Removal sections carry the disconnect timestamp when
+                    # present; not all setupapi versions write them.
+                    current_device = None
+                    current_delete = {}
+                    if "-" in line:
+                        parts = line.split("-")
+                        if len(parts) > 1:
+                            hw_id = parts[1].strip().rstrip("]").strip()
+                            if "usb\\" in hw_id.lower():
+                                current_delete["hw_id"] = hw_id
+                elif line.startswith(">>>  Section start"):
                     time_match = re.search(r"(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2})", line)
                     if time_match:
                         try:
@@ -417,25 +452,42 @@ class UsbHistoryAnalyzer(AnalyzerBase):
                             # setupapi timestamps are local machine time —
                             # convert to UTC instead of mislabeling them.
                             ts = naive_local.astimezone(timezone.utc)
-                            current_device["timestamp"] = ts
+                            if current_device is not None:
+                                current_device["timestamp"] = ts
+                            elif current_delete is not None:
+                                current_delete["timestamp"] = ts
                         except ValueError:
                             pass
-                elif line.startswith("<<<  Section end") and current_device is not None:
-                    if "timestamp" in current_device and "hw_id" in current_device:
-                        metadata = {
-                            "hardware_id": current_device["hw_id"],
-                            "source_log": "setupapi.dev.log",
-                        }
-                        event = DataEvent(
-                            timestamp=current_device["timestamp"],
-                            event_type=EventType.USB_CONNECT,
-                            source_device=artifact.device_id,
-                            source_path=artifact.source_path.name,
-                            confidence=Confidence.HIGH,
-                            metadata=metadata,
-                        )
-                        events.append(event)
-                    current_device = None
+                elif line.startswith("<<<  Section end"):
+                    if current_device is not None:
+                        if "timestamp" in current_device and "hw_id" in current_device:
+                            metadata = {
+                                "hardware_id": current_device["hw_id"],
+                                "source_log": "setupapi.dev.log",
+                            }
+                            events.append(DataEvent(
+                                timestamp=current_device["timestamp"],
+                                event_type=EventType.USB_CONNECT,
+                                source_device=artifact.device_id,
+                                source_path=artifact.source_path.name,
+                                confidence=Confidence.HIGH,
+                                metadata=metadata,
+                            ))
+                        current_device = None
+                    elif current_delete is not None:
+                        if "timestamp" in current_delete and "hw_id" in current_delete:
+                            events.append(DataEvent(
+                                timestamp=current_delete["timestamp"],
+                                event_type=EventType.USB_DISCONNECT,
+                                source_device=artifact.device_id,
+                                source_path=artifact.source_path.name,
+                                confidence=Confidence.MEDIUM,
+                                metadata={
+                                    "hardware_id": current_delete["hw_id"],
+                                    "source_log": "setupapi.dev.log",
+                                },
+                            ))
+                        current_delete = None
 
         except Exception as e:
             logger.debug("Failed to parse setupapi.dev.log: %s", e)

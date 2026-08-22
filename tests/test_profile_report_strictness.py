@@ -306,6 +306,7 @@ def test_full_report_contains_all_available_modules(tmp_path: Path):
     # Full report should contain all summary and movement sections
     assert "Executive Summary" in content
     assert "Data Movement" in content
-    assert "Timeline &amp; Activity" in content
+    assert "Timeline &amp; Events" in content
+    assert "System Artifacts" in content
     assert "Security Alerts" in content
     assert "Evidence &amp; Chain of Custody" in content

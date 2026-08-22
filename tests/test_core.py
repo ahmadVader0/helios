@@ -37,7 +37,7 @@ def test_cross_device_correlator(tmp_path):
 
     correlator = CrossDeviceCorrelator(inv)
     results = correlator.correlate()
-    assert len(results) == 4
+    assert len(results) == 5
     assert correlator.movement_chains[0].file_name == "secret.pdf"
 
 
@@ -249,5 +249,5 @@ def test_profile_report_renders_distinct_content(tmp_path):
     assert 'data-panel="tab-movement"' in rendered["full"]
 
     # Event log table renders real event rows
-    assert "Event Log" in rendered["full"]
-    assert "<th>Event Type</th>" in rendered["full"]
+    assert "Event Explorer" in rendered["full"]
+    assert 'data-key="type"' in rendered["full"]

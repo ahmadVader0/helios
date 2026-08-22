@@ -131,9 +131,11 @@ class ShellBagsAnalyzer(AnalyzerBase):
                         # just the source artifact and must not become the
                         # displayed path in the timeline.
                         source_path=folder_path,
+                        confidence=entry.get("confidence", Confidence.MEDIUM),
                         raw_source="ShellBags",
                         metadata={
                             "folder_path": folder_path,
+                            "timestamp_basis": entry.get("timestamp_basis", "unknown"),
                             "hive": str(artifact.source_path),
                             "user": artifact.metadata.get("user", "Unknown"),
                             "creation_time": str(entry.get("creation_time")),
@@ -188,22 +190,41 @@ class ShellBagsAnalyzer(AnalyzerBase):
                 )
                 if not folder_path:
                     continue
-                # SBECmd emits per-property timestamps with primary names
-                # AccessedOn, ModifiedOn, CreatedOn, FirstInteracted, LastInteracted,
-                # as well as hex-tagged legacy property columns.
-                last_accessed = self._parse_ez_timestamp(
-                    row.get("AccessedOn")
-                    or row.get("LastAccessed0x20")
-                    or row.get("LastInteracted")
-                    or row.get("ModifiedOn")
-                    or row.get("LastModified0x10")
-                    or row.get("LastModified0x30")
+                # SBECmd emits per-property timestamps. AccessedOn is the
+                # only genuine "access" basis — it is frequently blank, and
+                # falling back to ModifiedOn stamps events with the bag's
+                # last-write time (misleading "today" activity). Keep
+                # modified/created as metadata only, tagged by basis.
+                accessed = self._parse_ez_timestamp(
+                    row.get("AccessedOn") or row.get("LastAccessed0x20")
                 )
+                if accessed is not None:
+                    last_accessed, ts_basis, ts_conf = (
+                        accessed, "accessed", Confidence.HIGH,
+                    )
+                else:
+                    modified_only = self._parse_ez_timestamp(
+                        row.get("ModifiedOn") or row.get("LastModified0x10")
+                        or row.get("LastModified0x30")
+                    )
+                    interacted = self._parse_ez_timestamp(
+                        row.get("LastInteracted")
+                    )
+                    if interacted is not None:
+                        last_accessed, ts_basis, ts_conf = (
+                            interacted, "last_interacted", Confidence.MEDIUM,
+                        )
+                    elif modified_only is not None:
+                        last_accessed, ts_basis, ts_conf = (
+                            modified_only, "modified", Confidence.LOW,
+                        )
+                    else:
+                        continue  # no honest timestamp available — skip
+
                 modification_time = self._parse_ez_timestamp(
                     row.get("ModifiedOn")
                     or row.get("LastModified0x10")
                     or row.get("LastModified0x30")
-                    or row.get("LastAccessed0x20")
                 )
                 creation_time = self._parse_ez_timestamp(
                     row.get("CreatedOn")
@@ -214,6 +235,8 @@ class ShellBagsAnalyzer(AnalyzerBase):
                 entries.append({
                     "path": folder_path,
                     "last_accessed": last_accessed,
+                    "timestamp_basis": ts_basis,
+                    "confidence": ts_conf,
                     "creation_time": creation_time,
                     "modification_time": modification_time,
                     "volume": str(row.get("Volume", "") or row.get("VolumeName", "") or row.get("VolumeGuid", "")).strip(),

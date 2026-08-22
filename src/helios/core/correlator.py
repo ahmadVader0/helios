@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any
 
 from helios.models import (
@@ -29,6 +30,38 @@ def _safe_ts(ts: datetime | None) -> datetime:
     if ts.tzinfo is not None:
         return ts.replace(tzinfo=None)
     return ts
+
+
+def _drive_letter_of(path: str) -> str:
+    """Extract a comparable drive identifier from either Windows or POSIX paths.
+
+    ``Path(...).drive`` returns "" on Linux, which silently broke
+    cross-drive correlation for WSL scans (/mnt/d ↔ D:). This maps both
+    spellings to the same token: '/mnt/d/x' → 'D:', 'D:\\x' → 'D:',
+    '/media/usb' → '/MEDIA/USB' (still comparable between records).
+    """
+    if not path:
+        return ""
+    p = str(path)
+    drive = PureWindowsPath(p).drive
+    if drive:
+        return drive.upper()
+    # POSIX: recognize WSL-style /mnt/<letter> mounts as drive letters
+    parts = [seg for seg in p.split("/") if seg]
+    if len(parts) >= 2 and parts[0] == "mnt" and len(parts[1]) == 1 and parts[1].isalpha():
+        return f"{parts[1].upper()}:"
+    return ("/" + p).upper() if p.startswith("/") else p.upper()
+
+
+def _normalize_volume_serial(serial: object) -> str:
+    """Normalize a volume serial to uppercase hex (or '' when unusable).
+
+    LNK VolumeSerialNumber, MountPoints2 ``_Data`` bytes and registry
+    values all encode the same NTFS/FAT volume serial but arrive with
+    different formatting ('A4C2-1B03', 'a4c21b03', '0xa4c21b03', …).
+    """
+    text = re.sub(r"[^0-9A-Fa-f]", "", str(serial or ""))
+    return text.upper()
 
 
 @dataclass
@@ -82,6 +115,9 @@ class CrossDeviceCorrelator:
         
         usb_transfers = self.detect_usb_transfers()
         self.inferred_events.extend(usb_transfers)
+
+        historical = self.infer_historical_transfers()
+        self.inferred_events.extend(historical)
         
         exfiltration_alerts = self.detect_exfiltration_patterns()
         self.alerts.extend(exfiltration_alerts)
@@ -100,6 +136,11 @@ class CrossDeviceCorrelator:
                 "type": "inferred_usb_transfers",
                 "count": len(usb_transfers),
                 "data": usb_transfers
+            },
+            {
+                "type": "inferred_historical_transfers",
+                "count": len(historical),
+                "data": historical
             },
             {
                 "type": "exfiltration_alerts",
@@ -148,7 +189,7 @@ class CrossDeviceCorrelator:
                 continue
 
             devices_involved = set(d.device_id for d, _ in records)
-            drives_involved = set(Path(r.file_path).drive.upper() for _, r in records if r.file_path and Path(r.file_path).drive)
+            drives_involved = set(_drive_letter_of(r.file_path) for _, r in records if r.file_path)
             has_deleted = any(r.is_deleted for _, r in records)
 
             if len(devices_involved) > 1 or len(drives_involved) > 1 or has_deleted:
@@ -174,8 +215,8 @@ class CrossDeviceCorrelator:
                     if timestamp.year >= 9000:
                         continue
 
-                    prev_drive = Path(prev_rec.file_path).drive.upper() if prev_rec.file_path else ""
-                    curr_drive = Path(curr_rec.file_path).drive.upper() if curr_rec.file_path else ""
+                    prev_drive = _drive_letter_of(prev_rec.file_path) if prev_rec.file_path else ""
+                    curr_drive = _drive_letter_of(curr_rec.file_path) if curr_rec.file_path else ""
 
                     if curr_dev.device_id != prev_dev.device_id:
                         target_id = curr_dev.device_id
@@ -199,7 +240,7 @@ class CrossDeviceCorrelator:
                             if dev_id != source_device_id:
                                 target_device_ids.add(dev_id)
                     elif len(drives_involved) > 1:
-                        src_drv = Path(sorted_records[0][1].file_path).drive.upper() if sorted_records[0][1].file_path else ""
+                        src_drv = _drive_letter_of(sorted_records[0][1].file_path) if sorted_records[0][1].file_path else ""
                         for drv_id in drives_involved:
                             if drv_id != src_drv:
                                 target_device_ids.add(drv_id)
@@ -338,17 +379,142 @@ class CrossDeviceCorrelator:
                         source_path=event.source_path,
                         destination_path=event.source_path,
                         raw_source="Correlator",
-                        confidence=Confidence.HIGH if session["has_real_disconnect"] else Confidence.MEDIUM,
+                        # No disconnect event exists yet (nothing parses
+                        # removals reliably), so sessions are bounded by an
+                        # ASSUMED 4h window — that is inference, not fact.
+                        confidence=Confidence.HIGH if session["has_real_disconnect"] else Confidence.LOW,
                         metadata={
                             "original_event_id": event.event_id,
                             "target_device": usb_dev if usb_dev != "unknown_usb" else "Removable USB",
                             "file_name": metadata.get("file_name", Path(event.source_path).name),
+                            "inference": "session-window (disconnect unknown, 4h assumed)" if not session["has_real_disconnect"] else "session-window",
                             "description": "File transferred to USB storage during active connection session.",
                         }
                     )
                     inferred_events.append(transfer_event)
 
         return inferred_events
+
+    def infer_historical_transfers(self) -> list[DataEvent]:
+        """Reconstruct transfers to removable media from HISTORICAL artifacts.
+
+        The live-session path above can only fire while a USB device is
+        attached during the scan. Real exfiltration usually happened days
+        earlier — its evidence lives in LNK/JumpList records marked
+        ``removable_media_flag`` carrying a filesystem volume serial.
+
+        Join strategy:
+        1. Index MountPoints2 events by normalized volume serial (they prove
+           which serials belong to mounted volumes) and index USB sessions
+           from USB_CONNECT / setupapi events.
+        2. A removable-media LNK access whose volume serial matches a known
+           mount becomes an inferred FILE_COPY:
+             - MEDIUM confidence when it also falls inside a USB session window
+             - LOW confidence on serial match alone (no session evidence)
+        3. Removable accesses without any serial/session corroboration are
+           still emitted at LOW confidence as "removable media access" —
+           they are genuine artifact facts, just weaker inferences.
+        """
+        inferred: list[DataEvent] = []
+
+        host_dev_id = "Host PC"
+        for d in self.investigation.devices:
+            dtype = getattr(d.device_type, "value", str(d.device_type))
+            if dtype in ("PC", "LAPTOP", "SERVER"):
+                host_dev_id = d.device_id
+                break
+
+        # --- 1a. Volume serials proven to be real mounts -------------------
+        serial_mounts: dict[str, list[tuple[datetime, str]]] = {}
+        # --- 1b. USB sessions ------------------------------------------------
+        sessions: list[tuple[datetime, datetime]] = []
+        usb_names: dict[str, str] = {}
+
+        for evt in self.investigation.events:
+            etype = getattr(evt, "event_type", None)
+            etype_val = etype.value if etype is not None and hasattr(etype, "value") else str(etype or "")
+            meta = getattr(evt, "metadata", {}) or {}
+            ts = getattr(evt, "timestamp", None)
+            if ts is None:
+                continue
+            if etype_val == "USB_CONNECT":
+                norm_ts = _safe_ts(ts)
+                if norm_ts.year >= 9000:
+                    continue
+                hw = str(meta.get("hardware_id", "") or meta.get("serial_number", ""))
+                sessions.append((norm_ts, norm_ts + timedelta(hours=4)))
+                if hw:
+                    friendly = meta.get("friendly_name") or hw
+                    usb_names[_normalize_volume_serial(hw)] = friendly
+            elif etype_val == "USB_DISCONNECT":
+                pass  # connect windows already capped; disconnects tighten nothing here
+            elif etype_val == "DEVICE_CONNECT":
+                vs = _normalize_volume_serial(meta.get("volume_serial", ""))
+                if vs and len(vs) >= 8:
+                    serial_mounts.setdefault(vs[-8:], []).append((_safe_ts(ts), str(meta.get("mountpoint", ""))))
+
+        if not serial_mounts and not sessions:
+            return inferred
+
+        # --- 2/3. Match removable-media accesses against the indexes --------
+        seen_pairs: set[tuple[str, int]] = set()
+        for evt in self.investigation.events:
+            etype = getattr(evt, "event_type", None)
+            etype_val = etype.value if etype is not None and hasattr(etype, "value") else str(etype or "")
+            if etype_val != "FILE_ACCESS":
+                continue
+            meta = getattr(evt, "metadata", {}) or {}
+            if not (meta.get("removable_media_flag") or "removable" in str(meta.get("drive_type", "")).lower()):
+                continue
+
+            target = meta.get("target_path") or getattr(evt, "source_path", "")
+            if not target:
+                continue
+            ts = _safe_ts(getattr(evt, "timestamp", None))
+            if ts.year >= 9000:
+                continue
+
+            serial = _normalize_volume_serial(meta.get("volume_serial", ""))
+            serial_match = bool(serial) and serial[-8:] in serial_mounts if serial else False
+            in_session = any(start <= ts <= end for start, end in sessions)
+
+            if not (serial_match or in_session):
+                # Still a genuine removable-access fact — weakest inference.
+                confidence = Confidence.LOW
+                basis = "removable-access (no corroboration)"
+            elif in_session:
+                confidence = Confidence.MEDIUM
+                basis = "removable-access inside USB session"
+            else:
+                confidence = Confidence.MEDIUM
+                basis = f"volume-serial match ({serial[-8:]})"
+
+            dedup = (str(target), int(ts.timestamp()))
+            if dedup in seen_pairs:
+                continue
+            seen_pairs.add(dedup)
+
+            inferred.append(DataEvent(
+                timestamp=evt.timestamp,
+                event_type=EventType.FILE_COPY,
+                source_device=host_dev_id,
+                source_path=str(target),
+                destination_path=str(target),
+                confidence=confidence,
+                raw_source="Correlator (historical)",
+                metadata={
+                    "file_name": Path(str(target)).name,
+                    "target_device": "Removable USB Media",
+                    "volume_serial": serial,
+                    "inference": basis,
+                    "description": (
+                        f"Historic removable-media transfer inferred from {meta.get('tracker', 'LNK')} "
+                        f"record: {basis}"
+                    ),
+                },
+            ))
+
+        return inferred
 
     def detect_exfiltration_patterns(self) -> list[Alert]:
         """

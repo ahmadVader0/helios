@@ -4,8 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block report_title %}Helios Forensic Report — {{ investigation.case_name }}{% endblock %}</title>
-    <!-- ApexCharts (CDN) -->
-    <script src="https://cdn.jsdelivr.net/npm/apexcharts"></script>
+    <!-- ApexCharts vendored locally: fully self-contained / air-gap safe -->
+    <script>
+{% include 'vendor/apexcharts.min.js' %}
+    </script>
     <style>
         :root {
             --blue: #1d4ed8;
@@ -137,6 +139,12 @@
         }
         .report-table tbody tr:hover { background: var(--blue-soft); }
 
+        /* Sortable tables */
+        th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+        th.sortable::after { content: "⇅"; opacity: 0.35; margin-left: 5px; font-size: 11px; }
+        th.sortable.sort-asc::after { content: "▲"; opacity: 1; color: var(--blue); }
+        th.sortable.sort-desc::after { content: "▼"; opacity: 1; color: var(--blue); }
+
         /* Badges */
         .sev-badge, .badge {
             display: inline-block; padding: 2px 9px; border-radius: 20px;
@@ -152,6 +160,7 @@
         .badge-warn { background: #ffedd5; color: var(--high); }
         .badge-danger { background: #fee2e2; color: var(--crit); }
         .badge-blue { background: #dbeafe; color: var(--blue); }
+        .badge-gray { background: #f3f4f6; color: var(--muted); }
 
         .risk-high { color: var(--crit); font-weight: 700; }
         .risk-info { color: var(--muted); }
@@ -181,6 +190,90 @@
             background: var(--blue-soft); border: 1px solid #bfdbfe; border-radius: 8px;
             padding: 10px 14px; font-size: 12.5px; color: var(--ink); margin-top: 10px;
         }
+
+        /* ============ Event Explorer (interactive evidence tables) ============ */
+        .toolbar {
+            display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+            background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+            padding: 10px 12px; margin-bottom: 12px;
+        }
+        .toolbar input[type="text"], .toolbar input[type="date"], .toolbar select {
+            border: 1px solid var(--line); border-radius: 7px; padding: 6px 9px;
+            font-size: 12.5px; background: #fff; color: var(--ink);
+        }
+        .toolbar input.ev-q { flex: 1 1 220px; min-width: 180px; }
+        .toolbar label { font-size: 11.5px; color: var(--muted); display: flex; align-items: center; gap: 5px; }
+        .btn {
+            border: 1px solid var(--line); background: #fff; color: var(--ink);
+            border-radius: 7px; padding: 6px 12px; font-size: 12.5px; font-weight: 600;
+            cursor: pointer;
+        }
+        .btn:hover { border-color: var(--blue); color: var(--blue); }
+        .btn-primary { background: var(--blue); border-color: var(--blue); color: #fff; }
+        .btn-primary:hover { color: #fff; filter: brightness(1.08); }
+
+        .ev-meta { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+        .count-line { font-size: 12.5px; color: var(--muted); }
+        .count-line strong { color: var(--ink); }
+
+        .type-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+        .chip {
+            border: 1px solid var(--line); background: #fff; border-radius: 20px;
+            padding: 3px 11px; font-size: 12px; cursor: pointer; color: var(--ink);
+        }
+        .chip:hover { border-color: var(--blue); }
+        .chip.on { background: var(--blue); border-color: var(--blue); color: #fff; font-weight: 700; }
+        .chip .n { opacity: 0.75; font-weight: 400; margin-left: 4px; }
+
+        .pagination { display: flex; gap: 6px; align-items: center; justify-content: flex-end; margin-top: 10px; }
+        .pagination .btn[disabled] { opacity: 0.45; cursor: default; }
+        .pageinfo { font-size: 12.5px; color: var(--muted); margin-right: 8px; }
+
+        tr.ev-row { cursor: pointer; }
+        td.cell-path { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        td.cell-ts { white-space: nowrap; font-family: Consolas, monospace; font-size: 12px; }
+
+        mark { background: #fef08a; padding: 0 1px; border-radius: 2px; }
+
+        /* Drill-down drawer */
+        .drawer-backdrop {
+            position: fixed; inset: 0; background: rgba(15, 23, 42, 0.35);
+            opacity: 0; pointer-events: none; transition: opacity 0.15s ease; z-index: 200;
+        }
+        .drawer-backdrop.open { opacity: 1; pointer-events: auto; }
+        .drawer {
+            position: fixed; top: 0; right: -520px; width: 500px; max-width: 92vw; height: 100vh;
+            background: var(--card); border-left: 1px solid var(--line);
+            box-shadow: -12px 0 30px rgba(15, 23, 42, 0.12);
+            transition: right 0.18s ease; z-index: 201;
+            display: flex; flex-direction: column;
+        }
+        .drawer.open { right: 0; }
+        .drawer-head {
+            padding: 14px 18px; border-bottom: 1px solid var(--line);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .drawer-head h4 { font-size: 14px; }
+        .drawer-body { padding: 14px 18px; overflow-y: auto; flex: 1; }
+        .kv { display: grid; grid-template-columns: 130px 1fr; gap: 6px 12px; font-size: 12.8px; }
+        .kv dt { color: var(--muted); }
+        .kv dd { word-break: break-all; }
+
+        /* Export buttons */
+        .export-strip { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .export-strip a.btn { text-decoration: none; }
+
+        /* Detail expanders */
+        details.expander { border: 1px solid var(--line); border-radius: 8px; margin-top: 6px; }
+        details.expander > summary {
+            cursor: pointer; padding: 8px 12px; font-size: 12.5px; color: var(--blue); font-weight: 600;
+            list-style: none;
+        }
+        details.expander > summary::before { content: "▸ "; }
+        details.expander[open] > summary::before { content: "▾ "; }
+        details.expander .exp-body { padding: 4px 14px 10px; font-size: 12.5px; max-height: 240px; overflow-y: auto; }
+
+        {% block extra_styles %}{% endblock %}
     </style>
 </head>
 <body>
@@ -196,7 +289,7 @@
         </div>
         <div class="case-meta">
             <span>Case: <strong>{{ investigation.case_name }}</strong></span>
-            <span>Analyst: <strong>{{ investigation.investigator or 'Ahmad Forensics' }}</strong></span>
+            <span>Analyst: <strong>{{ investigation.investigator or 'Unknown Analyst' }}</strong></span>
             <span>Generated: <strong>{{ generated_at }}</strong></span>
         </div>
     </div>
@@ -210,8 +303,20 @@
         {% block panels_html %}{% endblock %}
     </main>
 
+    <!-- Drill-down drawer -->
+    <div class="drawer-backdrop" id="drawerBackdrop"></div>
+    <div class="drawer" id="detailDrawer" role="dialog" aria-modal="true" aria-label="Event detail">
+        <div class="drawer-head">
+            <h4>Evidence Detail</h4>
+            <button class="btn" id="drawerClose">Close ✕</button>
+        </div>
+        <div class="drawer-body" id="drawerBody"></div>
+    </div>
+
     <script>
-        function switchTab(evt, tabId) {            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        /* ============================ Tab navigation ============================ */
+        function switchTab(evt, tabId) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
             evt.currentTarget.classList.add('active');
             const target = document.getElementById(tabId);
@@ -240,6 +345,207 @@
             metric.addEventListener('click', (evt) => goToMetric(evt, metric.dataset.panel, metric.dataset.section));
         });
 
+        /* ============================ Utilities ============================ */
+        function heliosEsc(text) {
+            const div = document.createElement('div');
+            div.textContent = text === null || text === undefined ? '' : String(text);
+            return div.innerHTML;
+        }
+
+        function heliosDownloadCSV(rows, filename) {
+            if (!rows.length) return;
+            const cols = Object.keys(rows[0]);
+            const escCell = v => '"' + String(v === null || v === undefined ? '' : v).replace(/"/g, '""') + '"';
+            const csv = [cols.join(','), ...rows.map(r => cols.map(c => escCell(r[c])).join(','))].join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            URL.revokeObjectURL(a.href);
+            a.remove();
+        }
+
+        /* ============================ Drill-down drawer ============================ */
+        const _drawer = document.getElementById('detailDrawer');
+        const _backdrop = document.getElementById('drawerBackdrop');
+
+        function heliosOpenDrawer(title, pairs) {
+            document.getElementById('drawerBody').innerHTML =
+                '<h4 style="margin-bottom:10px;word-break:break-all;">' + heliosEsc(title) + '</h4>' +
+                '<dl class="kv">' +
+                pairs.map(([k, v]) =>
+                    '<dt>' + heliosEsc(k) + '</dt><dd>' +
+                    (v && typeof v === 'object' ? '<code>' + heliosEsc(JSON.stringify(v, null, 1)) + '</code>' : heliosEsc(v)) +
+                    '</dd>'
+                ).join('') +
+                '</dl>';
+            _drawer.classList.add('open');
+            _backdrop.classList.add('open');
+        }
+
+        function heliosCloseDrawer() {
+            _drawer.classList.remove('open');
+            _backdrop.classList.remove('open');
+        }
+
+        document.getElementById('drawerClose').addEventListener('click', heliosCloseDrawer);
+        _backdrop.addEventListener('click', heliosCloseDrawer);
+        document.addEventListener('keydown', e => { if (e.key === 'Escape') heliosCloseDrawer(); });
+
+        /* ============================ Event Explorer ============================
+           Client-side search / filter / sort / pagination over ALL collected
+           events. Activates automatically when the page defines
+           window.HELIOS_EVENTS and contains an #event-explorer container.   */
+        const HeliosExplorer = {
+            state: { q: '', types: {}, source: '', conf: '', from: '', to: '', sortKey: 'ts', sortDir: 'desc', page: 1, pageSize: 50 },
+            rows: [],
+
+            init(rows) {
+                this.rows = rows || [];
+                if (!document.getElementById('event-explorer')) return;
+
+                // Build type chips + source select from the data itself
+                const counts = {};
+                const sources = new Set();
+                this.rows.forEach(r => { counts[r.type] = (counts[r.type] || 0) + 1; sources.add(r.src || '—'); });
+
+                const chipWrap = document.getElementById('ev-chips');
+                chipWrap.innerHTML = Object.entries(counts).sort((a, b) => b[1] - a[1]).map(([t, n]) =>
+                    '<button class="chip" data-type="' + heliosEsc(t) + '">' + heliosEsc(t) + '<span class="n">' + n + '</span></button>'
+                ).join('');
+                chipWrap.querySelectorAll('.chip').forEach(ch => ch.addEventListener('click', () => {
+                    const t = ch.dataset.type;
+                    this.state.types[t] = !this.state.types[t];
+                    ch.classList.toggle('on', !!this.state.types[t]);
+                    this.render();
+                }));
+
+                const srcSel = document.getElementById('ev-source');
+                srcSel.innerHTML = '<option value="">All sources</option>' +
+                    [...sources].sort().map(s => '<option value="' + heliosEsc(s) + '">' + heliosEsc(s) + '</option>').join('');
+
+                ['ev-search'].forEach(id => document.getElementById(id).addEventListener('input',
+                    e => { this.state.q = e.target.value.toLowerCase(); this.state.page = 1; this.render(); }));
+                srcSel.addEventListener('change', e => { this.state.source = e.target.value; this.state.page = 1; this.render(); });
+                document.getElementById('ev-conf').addEventListener('change', e => { this.state.conf = e.target.value; this.state.page = 1; this.render(); });
+                document.getElementById('ev-from').addEventListener('change', e => { this.state.from = e.target.value; this.state.page = 1; this.render(); });
+                document.getElementById('ev-to').addEventListener('change', e => { this.state.to = e.target.value; this.state.page = 1; this.render(); });
+                document.getElementById('ev-reset').addEventListener('click', () => {
+                    this.state = { q: '', types: {}, source: '', conf: '', from: '', to: '', sortKey: 'ts', sortDir: 'desc', page: 1, pageSize: 50 };
+                    document.querySelectorAll('#ev-chips .chip').forEach(c => c.classList.remove('on'));
+                    ['ev-search'].forEach(id => document.getElementById(id).value = '');
+                    ['ev-source', 'ev-conf', 'ev-from', 'ev-to'].forEach(id => document.getElementById(id).value = '');
+                    this.render();
+                });
+                document.getElementById('ev-page-first').addEventListener('click', () => { this.state.page = 1; this.render(); });
+                document.getElementById('ev-page-prev').addEventListener('click', () => { this.state.page--; this.render(); });
+                document.getElementById('ev-page-next').addEventListener('click', () => { this.state.page++; this.render(); });
+                document.getElementById('ev-page-last').addEventListener('click', () => { this.state.page = this.pageCount(); this.render(); });
+                document.getElementById('ev-download').addEventListener('click', () => heliosDownloadCSV(this.filtered(), 'helios_events_filtered.csv'));
+
+                // Column sorting
+                document.querySelectorAll('#event-explorer th.sortable').forEach(th => th.addEventListener('click', () => {
+                    const k = th.dataset.key;
+                    if (this.state.sortKey === k) this.state.sortDir = this.state.sortDir === 'asc' ? 'desc' : 'asc';
+                    else { this.state.sortKey = k; this.state.sortDir = 'asc'; }
+                    document.querySelectorAll('#event-explorer th.sortable').forEach(x => x.classList.remove('sort-asc', 'sort-desc'));
+                    th.classList.add('sort-' + this.state.sortDir);
+                    this.render();
+                }));
+
+                this.render();
+            },
+
+            filtered() {
+                const s = this.state;
+                const activeTypes = Object.keys(s.types).filter(k => s.types[k]);
+                return this.rows.filter(r => {
+                    if (activeTypes.length && !activeTypes.includes(r.type)) return false;
+                    if (s.source && (r.src || '—') !== s.source) return false;
+                    if (s.conf && r.conf !== s.conf) return false;
+                    if (s.from && r.ts && r.ts.slice(0, 10) < s.from) return false;
+                    if (s.to && r.ts && r.ts.slice(0, 10) > s.to) return false;
+                    if (s.q) {
+                        const hay = (r.path + '\u0000' + r.device + '\u0000' + r.user + '\u0000' + r.dst).toLowerCase();
+                        if (!hay.includes(s.q)) return false;
+                    }
+                    return true;
+                });
+            },
+
+            pageCount() { return Math.max(1, Math.ceil(this.filtered().length / this.state.pageSize)); },
+
+            render() {
+                const s = this.state;
+                const data = this.filtered();
+                s.page = Math.min(Math.max(1, s.page), this.pageCount());
+
+                const sorted = [...data].sort((a, b) => {
+                    const va = String(a[s.sortKey] ?? ''), vb = String(b[s.sortKey] ?? '');
+                    return s.sortDir === 'asc' ? va.localeCompare(vb) : vb.localeCompare(va);
+                });
+                const slice = sorted.slice((s.page - 1) * s.pageSize, s.page * s.pageSize);
+
+                const confBadge = c => c === 'HIGH' ? '<span class="badge sev-low">HIGH</span>'
+                    : c === 'MEDIUM' ? '<span class="badge badge-warn">MED</span>'
+                    : c === 'LOW' ? '<span class="badge badge-gray">LOW</span>'
+                    : heliosEsc(c || '');
+
+                document.querySelector('#event-explorer tbody').innerHTML = slice.map(r =>
+                    '<tr class="ev-row" data-id="' + heliosEsc(r.id) + '">' +
+                    '<td class="cell-ts">' + heliosEsc(r.ts.replace('T', ' ')) + '</td>' +
+                    '<td>' + heliosEsc(r.type) + '</td>' +
+                    '<td>' + heliosEsc(r.device) + '</td>' +
+                    '<td class="cell-path" title="' + heliosEsc(r.path) + '">' + heliosEsc(r.path) + '</td>' +
+                    '<td>' + confBadge(r.conf) + '</td>' +
+                    '<td>' + heliosEsc(r.src) + (r.basis ? ' <span class="badge badge-gray">' + heliosEsc(r.basis) + '</span>' : '') + '</td>' +
+                    '</tr>'
+                ).join('') || '<tr><td colspan="6" class="empty-state">No events match the current filters.</td></tr>';
+
+                document.querySelector('#event-explorer tbody').querySelectorAll('tr.ev-row').forEach(tr =>
+                    tr.addEventListener('click', () => {
+                        const row = this.rows.find(r => r.id === tr.dataset.id);
+                        if (!row) return;
+                        heliosOpenDrawer(row.path || row.type, [
+                            ['Timestamp', row.ts.replace('T', ' ')],
+                            ['Type', row.type],
+                            ['Device', row.device],
+                            ['Path', row.path],
+                            ['Destination', row.dst || '—'],
+                            ['Confidence', row.conf],
+                            ['Source tool', row.src],
+                            ['Timestamp basis', row.basis || '—'],
+                            ['Account/User', row.user || '—'],
+                            ['Inference', row.inference || '—'],
+                            ['Event ID', row.id],
+                        ]);
+                    })
+                );
+
+                document.getElementById('ev-count').innerHTML =
+                    'Showing <strong>' + slice.length.toLocaleString() + '</strong> of <strong>' +
+                    data.length.toLocaleString() + '</strong> matching events (' + this.rows.length.toLocaleString() + ' total)';
+                document.getElementById('ev-pageinfo').textContent = 'Page ' + s.page + ' / ' + this.pageCount();
+                document.getElementById('ev-page-first').disabled = s.page <= 1;
+                document.getElementById('ev-page-prev').disabled = s.page <= 1;
+                document.getElementById('ev-page-next').disabled = s.page >= this.pageCount();
+                document.getElementById('ev-page-last').disabled = s.page >= this.pageCount();
+            },
+        };
+
+        /* Public API so charts/chips can drive the explorer */
+        window.heliosFilterEvents = function ({ type, from, to }) {
+            HeliosExplorer.state.types = type ? { [type]: true } : {};
+            if (from !== undefined) { HeliosExplorer.state.from = from; document.getElementById('ev-from').value = from; }
+            if (to !== undefined) { HeliosExplorer.state.to = to; document.getElementById('ev-to').value = to; }
+            document.querySelectorAll('#ev-chips .chip').forEach(c =>
+                c.classList.toggle('on', !!HeliosExplorer.state.types[c.dataset.type]));
+            HeliosExplorer.state.page = 1;
+            HeliosExplorer.render();
+        };
+
         document.addEventListener('DOMContentLoaded', function () {
             const charts = [
                 {% block charts_js %}{% endblock %}
@@ -253,7 +559,13 @@
                     el.innerHTML = '<p style="color:#6b7280;font-style:italic;font-size:13px;">No data to display.</p>';
                 }
             });
+
+            if (window.HELIOS_EVENTS && document.getElementById('event-explorer')) {
+                HeliosExplorer.init(window.HELIOS_EVENTS);
+            }
         });
+
+        {% block extra_js %}{% endblock %}
     </script>
 </body>
 </html>

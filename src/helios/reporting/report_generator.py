@@ -176,6 +176,217 @@ def _event_type_str(event: Any) -> str:
     return etype.value if etype is not None and hasattr(etype, "value") else str(etype or "")
 
 
+# ---------------------------------------------------------------------------
+# Analytics context builders (Phase C — reporting overhaul)
+# ---------------------------------------------------------------------------
+
+def _build_heatmap_matrix(events: list[Any]) -> dict[str, list[int]]:
+    """Bucket event timestamps into a day-of-week × hour activity matrix."""
+    matrix = {day: [0] * 24 for day in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")}
+    for evt in events:
+        ts = getattr(evt, "timestamp", None)
+        if ts is None or getattr(ts, "year", 0) >= 9000:
+            continue
+        try:
+            matrix[ts.strftime("%a")][ts.hour] += 1
+        except (KeyError, IndexError):
+            continue
+    # Drop empty leading/trailing days is unnecessary — heatmap reads fine full.
+    return matrix
+
+
+def _build_activity_by_day(events: list[Any]) -> list[dict[str, Any]]:
+    """Per-day event counts, chronological, for the filterable bar chart."""
+    counts: dict[str, int] = {}
+    for evt in events:
+        ts = getattr(evt, "timestamp", None)
+        if ts is None or getattr(ts, "year", 0) >= 9000:
+            continue
+        day = ts.strftime("%Y-%m-%d")
+        counts[day] = counts.get(day, 0) + 1
+    return [{"date": d, "count": c} for d, c in sorted(counts.items())]
+
+
+_MAX_EVENT_PAYLOAD = 25_000
+
+
+def _build_events_payload(events: list[Any], name_map: dict[str, str], max_rows: int = _MAX_EVENT_PAYLOAD) -> list[dict[str, Any]]:
+    """Serialize ALL events for the client-side Event Explorer table.
+
+    The browser renders this JSON with search/sort/filter/pagination, so the
+    old server-side 'first 500 rows' cap stops hiding evidence.
+    """
+    payload: list[dict[str, Any]] = []
+    for e in events[:max_rows]:
+        etype = getattr(e, "event_type", None)
+        meta = getattr(e, "metadata", {}) or {}
+        conf = getattr(e, "confidence", "")
+        evt_ts = getattr(e, "timestamp", None)
+        payload.append({
+            "id": getattr(e, "event_id", ""),
+            "ts": evt_ts.isoformat()[:19] if isinstance(evt_ts, datetime.datetime) else "",
+            "type": etype.value if etype is not None and hasattr(etype, "value") else str(etype or ""),
+            "device": _display_name(getattr(e, "source_device", ""), name_map),
+            "path": str(getattr(e, "source_path", "") or ""),
+            "dst": str(getattr(e, "destination_path", "") or ""),
+            "conf": conf.value if hasattr(conf, "value") else str(conf or ""),
+            "src": str(getattr(e, "raw_source", "") or ""),
+            "basis": str(meta.get("timestamp_basis", "") or ""),
+            "user": str(meta.get("account") or meta.get("user") or ""),
+            "inference": str(meta.get("inference", "") or ""),
+        })
+    payload.sort(key=lambda r: r["ts"], reverse=True)
+    return payload
+
+
+def _build_usb_device_rows(events: list[Any]) -> list[dict[str, Any]]:
+    """Aggregate USB connection history per physical device."""
+    devices: dict[str, dict[str, Any]] = {}
+    for evt in events:
+        etype_val = _event_type_str(evt)
+        if etype_val not in ("USB_CONNECT", "USB_DISCONNECT"):
+            continue
+        meta = getattr(evt, "metadata", {}) or {}
+        key = (
+            str(meta.get("hardware_id") or meta.get("serial_number") or meta.get("mountpoint")
+                or getattr(evt, "source_path", ""))[-64:]
+        )
+        entry = devices.setdefault(key, {
+            "hardware_id": str(meta.get("hardware_id", "") or meta.get("mountpoint", "") or key),
+            "friendly_name": str(meta.get("friendly_name", "") or ""),
+            "serial_number": str(meta.get("serial_number", "") or meta.get("volume_serial", "") or ""),
+            "connects": 0,
+            "disconnects": 0,
+            "first_seen": "",
+            "last_seen": "",
+            "sources": set(),
+        })
+        if etype_val == "USB_CONNECT":
+            entry["connects"] += 1
+        else:
+            entry["disconnects"] += 1
+        src = str(getattr(evt, "raw_source", "") or "")
+        if src:
+            entry["sources"].add(src)
+        ts_iso = ""
+        ts = getattr(evt, "timestamp", None)
+        if ts is not None and getattr(ts, "year", 0) < 9000:
+            ts_iso = ts.strftime("%Y-%m-%d %H:%M:%S")
+        if ts_iso:
+            if not entry["first_seen"] or ts_iso < entry["first_seen"]:
+                entry["first_seen"] = ts_iso
+            if not entry["last_seen"] or ts_iso > entry["last_seen"]:
+                entry["last_seen"] = ts_iso
+
+    rows = []
+    for e in devices.values():
+        e["sources"] = ", ".join(sorted(e["sources"]))
+        rows.append(e)
+    rows.sort(key=lambda r: r["last_seen"], reverse=True)
+    return rows
+
+
+def _build_prefetch_program_rows(events: list[Any]) -> list[dict[str, Any]]:
+    """Program-execution detail view from Prefetch APP_EXECUTE events."""
+    programs: dict[str, dict[str, Any]] = {}
+    for evt in events:
+        if _event_type_str(evt) != "APP_EXECUTE":
+            continue
+        meta = getattr(evt, "metadata", {}) or {}
+        exe = str(meta.get("executable", "") or Path(str(getattr(evt, "source_path", ""))).name)
+        if not exe or exe == ".":
+            continue
+        entry = programs.setdefault(exe.lower(), {
+            "executable": exe,
+            "run_count": int(meta.get("run_count", 0) or 0),
+            "runs": [],
+            "referenced_files": list(meta.get("referenced_files", []) or []),
+            "tool": str(meta.get("tool", "")),
+        })
+        rc = int(meta.get("run_count", 0) or 0)
+        if rc > entry["run_count"]:
+            entry["run_count"] = rc
+        ts = getattr(evt, "timestamp", None)
+        if ts is not None and getattr(ts, "year", 0) < 9000:
+            entry["runs"].append(ts.strftime("%Y-%m-%d %H:%M:%S"))
+        all_ts = meta.get("all_timestamps") or []
+        for t in all_ts:
+            text = str(t)[:19]
+            if text and text not in entry["runs"]:
+                entry["runs"].append(text)
+
+    rows = []
+    for p in programs.values():
+        runs = sorted(p["runs"])
+        rows.append({
+            "executable": p["executable"],
+            "run_count": max(p["run_count"], len(runs)),
+            "first_run": runs[0] if runs else "",
+            "last_run": runs[-1] if runs else "",
+            "all_runs": runs,
+            "referenced_files": p["referenced_files"],
+            "ref_count": len(p["referenced_files"]),
+            "tool": p["tool"],
+        })
+    rows.sort(key=lambda r: r["last_run"], reverse=True)
+    return rows
+
+
+def _build_logon_rows(events: list[Any]) -> list[dict[str, Any]]:
+    """Per-account logon success/failure summary from EVTX 4624/4625 events."""
+    accounts: dict[str, dict[str, Any]] = {}
+    for evt in events:
+        meta = getattr(evt, "metadata", {}) or {}
+        if not meta.get("event_id") in (4624, 4625, "4624", "4625"):
+            continue
+        account = str(meta.get("account", "") or "Unknown")
+        status = str(meta.get("status", "") or "")
+        entry = accounts.setdefault(account, {
+            "account": account,
+            "success": 0,
+            "failed": 0,
+            "last_success": "",
+            "last_failed": "",
+        })
+        ts = getattr(evt, "timestamp", None)
+        ts_iso = ts.strftime("%Y-%m-%d %H:%M:%S") if ts is not None and getattr(ts, "year", 0) < 9000 else ""
+        if status.lower() == "failed":
+            entry["failed"] += 1
+            if ts_iso and ts_iso > entry["last_failed"]:
+                entry["last_failed"] = ts_iso
+        else:
+            entry["success"] += 1
+            if ts_iso and ts_iso > entry["last_success"]:
+                entry["last_success"] = ts_iso
+    return sorted(accounts.values(), key=lambda a: a["failed"], reverse=True)
+
+
+def _build_shellbag_user_rows(events: list[Any]) -> list[dict[str, Any]]:
+    """Folder-browsing volume per user from ShellBags FILE_ACCESS events."""
+    users: dict[str, dict[str, Any]] = {}
+    for evt in events:
+        if str(getattr(evt, "raw_source", "")) != "ShellBags":
+            continue
+        meta = getattr(evt, "metadata", {}) or {}
+        user = str(meta.get("user", "") or "Unknown")
+        entry = users.setdefault(user, {
+            "user": user,
+            "folders": 0,
+            "removable_folders": 0,
+            "last_activity": "",
+        })
+        entry["folders"] += 1
+        path = str(meta.get("folder_path", "") or getattr(evt, "source_path", ""))
+        if re.match(r"^[D-Z]:\\\\?", path) and not re.match(r"^C:", path, re.IGNORECASE):
+            entry["removable_folders"] += 1
+        ts = getattr(evt, "timestamp", None)
+        if ts is not None and getattr(ts, "year", 0) < 9000:
+            iso = ts.strftime("%Y-%m-%d %H:%M:%S")
+            if iso > entry["last_activity"]:
+                entry["last_activity"] = iso
+    return sorted(users.values(), key=lambda u: u["folders"], reverse=True)
+
+
 def _pick_match(matches: list[Any]) -> Any | None:
     """Choose the most relevant event: preferred type first, else earliest."""
     if not matches:
@@ -389,10 +600,9 @@ class ReportGenerator:
         devices = getattr(self.investigation, "devices", [])
         drives = getattr(self.investigation, "drives_scanned", [])
         correlations = getattr(self.investigation, "correlations", [])
-        heatmap_matrix = getattr(self.investigation, "heatmap_matrix", {})
 
         timeline_chart = ApexChartBuilder.build_timeline_chart(events)
-        heatmap_chart = ApexChartBuilder.build_heatmap_chart(heatmap_matrix)
+        heatmap_chart = ApexChartBuilder.build_heatmap_chart(_build_heatmap_matrix(events))
         filetype_chart = ApexChartBuilder.build_filetype_donut(file_records)
         deletion_chart = ApexChartBuilder.build_deletion_bar_chart(events)
         data_flow_chart = ApexChartBuilder.build_data_flow_chart(correlations, devices)
@@ -500,6 +710,48 @@ class ReportGenerator:
             if r["type"] in _USB_TYPES or r["raw_source"] in _USB_SOURCES
         ]
 
+        # --- Phase C analytics context ------------------------------------
+        device_names = _device_name_map(devices)
+        events_payload = _build_events_payload(events, device_names)
+        activity_by_day = _build_activity_by_day(events)
+        usb_devices = _build_usb_device_rows(events)
+        prefetch_programs = _build_prefetch_program_rows(events)
+        logon_summary = _build_logon_rows(events)
+        shellbag_users = _build_shellbag_user_rows(events)
+
+        # Rule provenance appendix: unique RULE-xxx ids actually raised
+        rules_applied = sorted(
+            {f"{a.rule_id} — {a.rule_name}" for a in alerts if getattr(a, "rule_id", "")},
+        )
+
+        # Profile intent from config so the report states the analyst's scope
+        profile_description = ""
+        try:
+            profiles_cfg = (getattr(self.config, "investigation_profiles", None) or {})
+            if isinstance(profiles_cfg, dict):
+                prof_body = profiles_cfg.get(getattr(self.investigation, "profile_name", "") or "", {})
+                if isinstance(prof_body, dict):
+                    profile_description = str(prof_body.get("description", "") or "")
+        except Exception:  # noqa: BLE001 - description is cosmetic
+            profile_description = ""
+
+        # Exports written next to the report and linked from it
+        export_dir = output_path.parent / "exports"
+        try:
+            export_files = [p.name for p in self.generate_csv_bundle(export_dir)]
+            json_path = self.generate_json_export(export_dir / "investigation.json")
+            export_files.append(json_path.name)
+            events_payload_path = export_dir / "events_full.json"
+            with events_payload_path.open("w", encoding="utf-8") as f:
+                json.dump(events_payload, f)
+            export_files.append(events_payload_path.name)
+        except Exception:  # noqa: BLE001 - report must render even if exports fail
+            export_files = []
+
+        event_type_counts: dict[str, int] = {}
+        for row in events_payload:
+            event_type_counts[row["type"]] = event_type_counts.get(row["type"], 0) + 1
+
         context = {
             "investigation": self.investigation,
             "config": self.config,
@@ -523,6 +775,17 @@ class ReportGenerator:
             "movements": movements,
             "deletions": deletions,
             "top_alerts": alerts[:8],
+            # Phase C additions
+            "profile_description": profile_description,
+            "events_payload": events_payload,
+            "activity_by_day": activity_by_day,
+            "event_type_counts": event_type_counts,
+            "usb_device_rows": usb_devices,
+            "prefetch_programs": prefetch_programs,
+            "logon_summary": logon_summary,
+            "shellbag_users": shellbag_users,
+            "rules_applied": rules_applied,
+            "export_files": export_files,
         }
 
         rendered_html = template.render(**context)
@@ -553,6 +816,24 @@ class ReportGenerator:
             The Path where the report was saved.
         """
         rows: list[dict[str, Any]] = []
+
+        def _highlight(context_text: str, keywords: list[str]) -> str:
+            """Wrap every keyword occurrence in <mark> for hit highlighting."""
+            safe_ctx = str(context_text or "")
+            for kw in [k for k in keywords if k]:
+                try:
+                    safe_ctx = re.sub(
+                        rf"({re.escape(str(kw))})",
+                        r"<mark>\1</mark>",
+                        safe_ctx,
+                        flags=re.IGNORECASE,
+                    )
+                except re.error:
+                    continue
+            return safe_ctx
+
+        search_keywords = [str(k) for k in (meta.get("keywords", []) or [])]
+
         for r in results:
             if isinstance(r, dict):
                 rows.append({
@@ -560,7 +841,7 @@ class ReportGenerator:
                     "keyword": r.get("keyword", ""),
                     "file_name": r.get("file_name", ""),
                     "file_path": r.get("file_path", ""),
-                    "match_context": r.get("match_context", ""),
+                    "match_context": _highlight(r.get("match_context", ""), search_keywords),
                     "line_number": r.get("line_number"),
                 })
             else:
@@ -569,7 +850,7 @@ class ReportGenerator:
                     "keyword": getattr(r, "keyword", ""),
                     "file_name": getattr(r, "file_name", ""),
                     "file_path": getattr(r, "file_path", ""),
-                    "match_context": getattr(r, "match_context", ""),
+                    "match_context": _highlight(getattr(r, "match_context", ""), search_keywords),
                     "line_number": getattr(r, "line_number", None),
                 })
 

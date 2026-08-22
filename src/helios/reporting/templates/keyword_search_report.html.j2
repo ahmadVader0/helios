@@ -190,7 +190,7 @@
                         <td><code>{{ r.file_path }}</code></td>
                         <td>
                             {% if r.line_number %}<span class="note">line {{ r.line_number }}:</span>{% endif %}
-                            <span>{{ r.match_context }}</span>
+                            <span>{{ r.match_context | safe }}</span>
                         </td>
                     </tr>
                     {% endfor %}

@@ -2,6 +2,7 @@
 HTML Table Builder for Helios Reports.
 """
 
+from datetime import datetime as _dt
 from typing import Any
 
 
@@ -16,56 +17,21 @@ class HTMLTableBuilder:
         text = str(text)
         return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("'", "&#39;")
 
-    @classmethod
-    def build_events_table(cls, events: list[Any], table_id: str = 'eventsTable') -> str:
-        """
-        Render a sortable HTML table for events.
-
-        Args:
-            events: List of DataEvent instances.
-            table_id: The ID to assign to the HTML table.
-
-        Returns:
-            HTML string of the table.
-        """
-        html = [
-            '<div class="table-responsive">',
-            f'<input type="text" id="{table_id}_search" class="form-control mb-3" placeholder="Search events..." onkeyup="filterTable(\'{table_id}\')">',
-            f'<table id="{table_id}" class="table table-striped table-hover sortable">',
-            '<thead>',
-            '<tr>',
-            f'<th onclick="sortTable(\'{table_id}\', 0)">Timestamp &#x21D5;</th>',
-            f'<th onclick="sortTable(\'{table_id}\', 1)">Event Type &#x21D5;</th>',
-            f'<th onclick="sortTable(\'{table_id}\', 2)">Source &#x21D5;</th>',
-            f'<th onclick="sortTable(\'{table_id}\', 3)">Description &#x21D5;</th>',
-            '</tr>',
-            '</thead>',
-            '<tbody>'
-        ]
-
-        for event in events:
-            ts = cls._escape(getattr(event, "timestamp", ""))
-            ev_type = cls._escape(getattr(event, "event_type", getattr(event, "action", "")))
-            source = cls._escape(getattr(event, "source_device", ""))
-            desc = cls._escape(getattr(event, "metadata", {}).get("description", "") if isinstance(getattr(event, "metadata", None), dict) else "")
-
-            html.append('<tr>')
-            html.append(f'<td>{ts}</td>')
-            html.append(f'<td><span class="badge bg-secondary">{ev_type}</span></td>')
-            html.append(f'<td>{source}</td>')
-            html.append(f'<td>{desc}</td>')
-            html.append('</tr>')
-
-        html.append('</tbody>')
-        html.append('</table>')
-        html.append('</div>')
-
-        return "\n".join(html)
+    @staticmethod
+    def _fmt_ts(value: Any) -> str:
+        """Render timestamps consistently (second precision, no microseconds)."""
+        if isinstance(value, _dt):
+            if getattr(value, "year", 0) >= 9000:
+                return ""
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        text = str(value or "")
+        return text[:19].replace("T", " ") if len(text) > 19 else text
 
     @classmethod
     def build_alerts_table(cls, alerts: list[Any], table_id: str = 'alertsTable') -> str:
         """
-        Render a sortable alerts table colored by severity.
+        Render the alerts table colored by severity, with detection-rule
+        provenance when a rule id is attached to the alert.
 
         Args:
             alerts: List of Alert instances.
@@ -74,6 +40,8 @@ class HTMLTableBuilder:
         Returns:
             HTML string of the table.
         """
+        any_rule = any(getattr(a, "rule_id", "") for a in alerts)
+
         html = [
             '<div class="table-responsive">',
             f'<table id="{table_id}" class="report-table">',
@@ -84,10 +52,10 @@ class HTMLTableBuilder:
             '<th>Title</th>',
             '<th>Description</th>',
             '<th>Artifact Path</th>',
-            '</tr>',
-            '</thead>',
-            '<tbody>'
         ]
+        if any_rule:
+            html.append('<th>Detection Rule</th>')
+        html.extend(['</tr>', '</thead>', '<tbody>'])
 
         severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3, "info": 4}
 
@@ -109,7 +77,7 @@ class HTMLTableBuilder:
 
         for alert in sorted(alerts, key=lambda a: severity_order.get(severity_of(a), 9)):
             severity = severity_of(alert)
-            ts = cls._escape(getattr(alert, "timestamp", ""))
+            ts = cls._escape(cls._fmt_ts(getattr(alert, "timestamp", "")))
             title = cls._escape(getattr(alert, "title", ""))
             desc = cls._escape(getattr(alert, "description", ""))
             path = cls._escape(first_path(alert))
@@ -120,63 +88,11 @@ class HTMLTableBuilder:
             html.append(f'<td><strong>{title}</strong></td>')
             html.append(f'<td>{desc}</td>')
             html.append(f'<td><small><code>{path or "—"}</code></small></td>')
-            html.append('</tr>')
-
-        html.append('</tbody>')
-        html.append('</table>')
-        html.append('</div>')
-
-        return "\n".join(html)
-
-    @classmethod
-    def build_files_table(cls, records: list[Any], table_id: str = 'filesTable') -> str:
-        """
-        Render a file records table.
-
-        Args:
-            records: List of FileRecord instances.
-            table_id: The ID to assign to the HTML table.
-
-        Returns:
-            HTML string of the table.
-        """
-        html = [
-            '<div class="table-responsive">',
-            f'<input type="text" id="{table_id}_search" class="form-control mb-3" placeholder="Search files..." onkeyup="filterTable(\'{table_id}\')">',
-            f'<table id="{table_id}" class="table table-striped table-hover sortable">',
-            '<thead>',
-            '<tr>',
-            f'<th onclick="sortTable(\'{table_id}\', 0)">File Name &#x21D5;</th>',
-            f'<th onclick="sortTable(\'{table_id}\', 1)">Path &#x21D5;</th>',
-            f'<th onclick="sortTable(\'{table_id}\', 2)">Size &#x21D5;</th>',
-            f'<th onclick="sortTable(\'{table_id}\', 3)">Status &#x21D5;</th>',
-            '</tr>',
-            '</thead>',
-            '<tbody>'
-        ]
-
-        for record in records:
-            name = cls._escape(getattr(record, "file_name", ""))
-            path = cls._escape(getattr(record, "file_path", ""))
-            size = getattr(record, "size", 0)
-            is_deleted = getattr(record, "is_deleted", False)
-            is_recovered = getattr(record, "is_recovered", False)
-
-            status_badges = []
-            if is_deleted:
-                status_badges.append('<span class="badge bg-danger">Deleted</span>')
-            if is_recovered:
-                status_badges.append('<span class="badge bg-success">Recovered</span>')
-            if not is_deleted and not is_recovered:
-                status_badges.append('<span class="badge bg-primary">Existing</span>')
-            
-            status_html = " ".join(status_badges)
-
-            html.append('<tr>')
-            html.append(f'<td>{name}</td>')
-            html.append(f'<td><small><code>{path}</code></small></td>')
-            html.append(f'<td>{size} bytes</td>')
-            html.append(f'<td>{status_html}</td>')
+            if any_rule:
+                rule_id = cls._escape(getattr(alert, "rule_id", ""))
+                rule_name = cls._escape(getattr(alert, "rule_name", ""))
+                cell = f'{rule_id}<br><small style="color:#6b7280;">{rule_name}</small>' if rule_id else '—'
+                html.append(f'<td>{cell}</td>')
             html.append('</tr>')
 
         html.append('</tbody>')

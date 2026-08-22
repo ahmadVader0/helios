@@ -176,7 +176,7 @@
     <table class="report-table">
         <tbody>
             <tr><td style="width: 200px;">Case Reference</td><td><strong>{{ investigation.case_name }}</strong> (<code>{{ investigation.case_id }}</code>)</td></tr>
-            <tr><td>Lead Investigator</td><td>{{ investigation.investigator or 'Ahmad Forensics' }}</td></tr>
+            <tr><td>Lead Investigator</td><td>{{ investigation.investigator or 'Unknown Analyst' }}</td></tr>
             <tr><td>Report Generated</td><td>{{ generated_at }}</td></tr>
             <tr><td>Scanned Targets</td><td>{% for d in drives %}{{ d.drive_letter }} ({{ d.label or 'Volume' }}, {{ d.filesystem }}){% if not loop.last %}; {% endif %}{% else %}—{% endfor %}</td></tr>
         </tbody>
@@ -191,15 +191,189 @@
         {% endfor %}
     </div>
     {% else %}
-    <p class="empty-state">[{{ generated_at }}] Case initialized by {{ investigation.investigator or 'Ahmad Forensics' }}. No additional custody entries recorded.</p>
+    <p class="empty-state">[{{ generated_at }}] Case initialized by {{ investigation.investigator or 'Unknown Analyst' }}. No additional custody entries recorded.</p>
     {% endif %}
 </div>
 <div class="card">
-    <h3>Evidence Package</h3>
-    <p style="font-size: 13px; color: var(--muted);">
-        The full dataset (events, alerts, file records, correlations) is exported alongside this report
-        as JSON and CSV, and packaged into a tamper-evident ZIP with SHA-256 integrity verification
-        (see <code>exports/</code> and the chain-of-custody JSON in the case output directory).
-    </p>
+    <h3>Evidence Package — Exports</h3>
+    {% if export_files %}
+    <p class="section-desc">Machine-readable exports written next to this report. Click to download.</p>
+    <div class="export-strip">
+        {% for f in export_files %}
+        <a class="btn" href="exports/{{ f }}" download>⬇ {{ f }}</a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-state">Exports could not be generated for this report.</p>
+    {% endif %}
 </div>
+{%- endmacro %}
+
+{% macro rules_appendix() -%}
+{% if rules_applied %}
+<div class="card">
+    <h3>Detection Rules Applied</h3>
+    <p class="section-desc">Configured suspicious-activity rules that produced findings in this case. Full rule definitions live in <code>config/suspicious_rules.yaml</code>.</p>
+    <ul class="findings">
+        {% for r in rules_applied %}
+        <li><span class="badge badge-blue">{{ r.split(' — ')[0] }}</span><span>{{ r.split(' — ', 1)[1] if r.split(' — ', 1) | length > 1 else '' }}</span></li>
+        {% endfor %}
+    </ul>
+</div>
+{% endif %}
+{%- endmacro %}
+
+{% macro events_explorer() -%}
+<div class="card" id="sec-explorer">
+    <h3>Event Explorer</h3>
+    <p class="section-desc">Search, filter, sort and page through every collected event. Click a row for full detail; use Export CSV to save exactly what you filtered.</p>
+
+    {# Activity-by-day quick filter #}
+    {% if activity_by_day %}
+    <details class="expander" open>
+        <summary>Activity by day ({{ activity_by_day | length }} days) — click a bar's date range below to filter</summary>
+        <div class="exp-body">
+            <div id="explorerDayChart"></div>
+        </div>
+    </details>
+    {% endif %}
+
+    <div class="toolbar">
+        <input type="text" id="ev-search" class="ev-q" placeholder="Search path / device / user…">
+        <select id="ev-source"></select>
+        <select id="ev-conf">
+            <option value="">Any confidence</option>
+            <option value="HIGH">HIGH</option>
+            <option value="MEDIUM">MEDIUM</option>
+            <option value="LOW">LOW</option>
+        </select>
+        <label>From <input type="date" id="ev-from"></label>
+        <label>To <input type="date" id="ev-to"></label>
+        <button class="btn" id="ev-reset">Reset</button>
+        <button class="btn btn-primary" id="ev-download">⬇ Export CSV</button>
+    </div>
+
+    <div class="type-chips" id="ev-chips"></div>
+    <div class="ev-meta"><span class="count-line" id="ev-count"></span></div>
+
+    <table class="report-table" id="event-explorer">
+        <thead>
+            <tr>
+                <th class="sortable size-nowrap" data-key="ts">Timestamp</th>
+                <th class="sortable" data-key="type">Type</th>
+                <th class="sortable" data-key="device">Device</th>
+                <th class="sortable" data-key="path">Path</th>
+                <th class="sortable size-nowrap" data-key="conf">Conf.</th>
+                <th class="sortable" data-key="src">Source</th>
+            </tr>
+        </thead>
+        <tbody><tr><td colspan="6" class="empty-state">Loading events…</td></tr></tbody>
+    </table>
+    <div class="pagination">
+        <span class="pageinfo" id="ev-pageinfo"></span>
+        <button class="btn" id="ev-page-first">«</button>
+        <button class="btn" id="ev-page-prev">‹ Prev</button>
+        <button class="btn" id="ev-page-next">Next ›</button>
+        <button class="btn" id="ev-page-last">»</button>
+    </div>
+</div>
+{%- endmacro %}
+
+{% macro usb_devices_card() -%}
+{% if usb_device_rows %}
+<div class="card">
+    <h3>USB Devices Known to This System</h3>
+    <table class="report-table dev-table">
+        <thead>
+            <tr><th>Friendly Name / Hardware ID</th><th>Serial / Volume ID</th><th class="size-nowrap">Connects</th><th class="size-nowrap">First Seen</th><th class="size-nowrap">Last Seen</th><th>Sources</th></tr>
+        </thead>
+        <tbody>
+            {% for d in usb_device_rows[:100] %}
+            <tr>
+                <td><strong>{{ d.friendly_name or d.hardware_id }}</strong>{% if d.friendly_name and d.hardware_id %}<br><small style="color:var(--muted);">{{ d.hardware_id }}</small>{% endif %}</td>
+                <td><code>{{ d.serial_number or '—' }}</code></td>
+                <td>{{ d.connects }}{% if d.disconnects %} / {{ d.disconnects }} disc.{% endif %}</td>
+                <td class="size-nowrap">{{ d.first_seen or '—' }}</td>
+                <td class="size-nowrap">{{ d.last_seen or '—' }}</td>
+                <td><small style="color:var(--muted);">{{ d.sources }}</small></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{%- endmacro %}
+
+{% macro prefetch_programs_card() -%}
+{% if prefetch_programs %}
+<div class="card">
+    <h3>Program Execution Detail (Prefetch)</h3>
+    <table class="report-table dev-table">
+        <thead>
+            <tr><th>Executable</th><th class="size-nowrap">Run Count</th><th class="size-nowrap">Last Run</th><th class="size-nowrap">Referenced Files</th><th>Parser</th></tr>
+        </thead>
+        <tbody>
+            {% for p in prefetch_programs[:150] %}
+            <tr>
+                <td><strong>{{ p.executable }}</strong></td>
+                <td>{{ p.run_count }}</td>
+                <td class="size-nowrap">{{ p.last_run or '—' }}</td>
+                <td>
+                    {% if p.ref_count %}
+                        {{ p.ref_count }}
+                        <details class="expander"><summary>show referenced paths</summary>
+                            <div class="exp-body">{% for f in p.referenced_files[:40] %}<code>{{ f }}</code><br>{% endfor %}</div>
+                        </details>
+                    {% else %}—{% endif %}
+                </td>
+                <td><small style="color:var(--muted);">{{ p.tool or 'Built-in' }}</small></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{%- endmacro %}
+
+{% macro logon_summary_card() -%}
+{% if logon_summary %}
+<div class="card">
+    <h3>Account Logon Summary (EVTX 4624/4625)</h3>
+    <table class="report-table dev-table">
+        <thead><tr><th>Account</th><th class="size-nowrap">Successful</th><th class="size-nowrap">Failed</th><th class="size-nowrap">Last Success</th><th class="size-nowrap">Last Failure</th></tr></thead>
+        <tbody>
+            {% for l in logon_summary[:50] %}
+            <tr>
+                <td><strong>{{ l.account }}</strong></td>
+                <td>{{ l.success }}</td>
+                <td>{% if l.failed %}<span class="badge badge-danger">{{ l.failed }}</span>{% else %}0{% endif %}</td>
+                <td class="size-nowrap">{{ l.last_success or '—' }}</td>
+                <td class="size-nowrap">{{ l.last_failed or '—' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+{%- endmacro %}
+
+{% macro shellbag_users_card() -%}
+{% if shellbag_users %}
+<div class="card">
+    <h3>Folder Browsing by User (ShellBags)</h3>
+    <table class="report-table dev-table">
+        <thead><tr><th>User</th><th class="size-nowrap">Folders Browsed</th><th class="size-nowrap">Non-C: Folders</th><th class="size-nowrap">Last Activity</th></tr></thead>
+        <tbody>
+            {% for u in shellbag_users %}
+            <tr>
+                <td><strong>{{ u.user }}</strong></td>
+                <td>{{ u.folders }}</td>
+                <td>{% if u.removable_folders %}<span class="badge badge-warn">{{ u.removable_folders }}</span>{% else %}0{% endif %}</td>
+                <td class="size-nowrap">{{ u.last_activity or '—' }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
 {%- endmacro %}
