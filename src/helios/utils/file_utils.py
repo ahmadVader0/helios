@@ -1,4 +1,3 @@
-from pathlib import Path
 
 
 def format_size(size_bytes: int) -> str:

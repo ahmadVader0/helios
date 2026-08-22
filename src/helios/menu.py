@@ -1,7 +1,7 @@
 """
 Helios Interactive Menu System — Production-Grade Numbered CLI Interface.
 
-This module provides a comprehensive, highly robust interactive menu system for Helios.
+Interactive menu system for Helios.
 It handles navigation, input validation, breadcrumb tracking, interactive drive selection,
 profile inspection, snapshot diffing workflows, and graceful exception handling.
 
@@ -44,7 +44,6 @@ from helios.display import (
     print_drives_table,
     print_scan_summary,
 )
-from helios.pipeline import MAX_FILES_PER_DRIVE
 
 init_windows_console()
 from helios.models import (
@@ -65,7 +64,16 @@ logger = logging.getLogger(__name__)
 # a shaded Unicode sphere (█ ▓ ▒ ░) with golden gradient and responsive layout.
 
 def render_menu_banner() -> None:
-    """Renders the golden Helios logo banner with adaptive terminal sizing."""
+    """Renders the golden Helios logo banner with adaptive terminal sizing.
+
+    The first draw of the session plays a brief shimmer animation across
+    the sun/logo; every later draw is the classic static banner. Disable
+    entirely with HELIOS_NO_ANIM=1.
+    """
+    from helios.display import animate_banner_once, _BANNER_ANIM_PLAYED
+
+    if not _BANNER_ANIM_PLAYED:
+        animate_banner_once()
     console.print(build_banner_panel())
 
 
@@ -236,254 +244,207 @@ def _safe_get_username() -> str:
 
 
 def menu_new_investigation(config: HeliosConfig) -> None:
-    """Step-by-step guided wizard for initiating a forensic investigation case."""
+    """Guided wizard: B goes back one step; every parameter stays editable
+    from the summary screen. Invalid input re-prompts — never exits."""
     clear_screen()
     render_menu_banner()
     console.rule("[bold steel_blue]Main Menu > [1] New Investigation Wizard[/bold steel_blue]")
-
     console.print(
         Panel(
-            "[white]This wizard will guide you through configuring a forensically sound case scan.\n"
-            "You can specify target drives, file filters, date boundaries, and detection profiles.[/white]",
+            "[white]Configure the case: target volumes, date bounds, detection profile.\n"
+            "Enter B at any prompt to change an earlier answer.[/white]",
             title="[bold steel_blue]Investigation Setup[/bold steel_blue]",
             border_style="steel_blue",
         )
     )
 
-    # Step 1: Case Identifiers
-    case_name = get_safe_input(
-        "Enter Case Name / Reference ID",
-        default_value="Case-" + datetime.now().strftime("%Y%m%d-%H%M"),
-        help_text="Unique name used for evidence packaging and report generation.",
-    )
-    if case_name.upper() == "B":
-        return
-
-    investigator = get_safe_input(
-        "Enter Investigator Name",
-        default_value=_safe_get_username(),
-        help_text="Name of the primary forensic analyst leading the investigation.",
-    )
-    if investigator.upper() == "B":
-        return
-
-    # Step 2: Target & Device Selection
-    console.print("\n[bold steel_blue]Detecting mounted volumes and devices...[/bold steel_blue]")
-    drives, android_devices = detector.detect_all_devices()
-
-    if not drives and not android_devices:
-        console.print("[bold red][!] No mounted drives or connected devices detected on the system.[/bold red]")
-        get_safe_input("Press Enter to return to Main Menu", allow_empty=True)
-        return
-
-    if drives:
-        print_drives_table(drives)
-
-    all_targets: list[tuple[str, Any]] = []
-    console.print("\n[bold white]Target Selection Options:[/bold white]")
-
-    for drv in drives:
-        all_targets.append(("drive", drv))
-        idx = len(all_targets)
-        rem_flag = " [USB Removable]" if drv.is_removable else ""
-        console.print(
-            f"  [[bold gold1]{idx}[/bold gold1]] Drive [bold cyan]{drv.drive_letter}[/bold cyan] "
-            f"({drv.label or 'Unlabeled'}) - {drv.filesystem} - {format_size(drv.total_size)}{rem_flag}"
-        )
-
-    for dev in android_devices:
-        all_targets.append(("android", dev))
-        idx = len(all_targets)
-        console.print(
-            f"  [[bold gold1]{idx}[/bold gold1]] Android Device [bold green]{dev.device_name}[/bold green] "
-            f"(Serial: {dev.serial_number}, {dev.os_version})"
-        )
-
-    console.print("  [[bold gold1]A[/bold gold1]] Select All Detected Targets")
-    console.print("  [[bold gold1]B[/bold gold1]] Back to Main Menu")
-
-    selection_input = get_safe_input(
-        "\nSelect target numbers (comma-separated, e.g. 1,3 or 'A')",
-        default_value="A",
-    )
-
-    if selection_input.upper() == "B":
-        return
-
+    case_name = ""
+    investigator = ""
     selected_drive_letters: list[str] = []
     selected_android: list[Device] = []
+    chosen_profile = "full"
+    date_from_str = ""
+    date_to_str = ""
 
-    if selection_input.upper() == "A":
-        for ttype, tobj in all_targets:
-            if ttype == "drive":
-                selected_drive_letters.append(tobj.drive_letter)
-            else:
-                selected_android.append(tobj)
-    else:
-        raw_indices = [x.strip() for x in selection_input.split(",")]
-        for idx_str in raw_indices:
-            if idx_str.isdigit():
-                num = int(idx_str)
-                if 1 <= num <= len(all_targets):
-                    ttype, tobj = all_targets[num - 1]
+    labels = {0: "Case info", 1: "Targets", 2: "Profile", 3: "Dates"}
+    step = 0
+    back_to_summary = False
+
+    while True:
+        if step == 0:
+            new_case = get_safe_input(
+                "Case Name / Reference ID",
+                default_value=case_name or ("Case-" + datetime.now().strftime("%Y%m%d-%H%M")),
+                help_text="Used in report/evidence filenames.",
+            )
+            if new_case.upper() == "B":
+                if back_to_summary:
+                    step = 4
+                    continue
+                return
+            who = get_safe_input("Investigator Name", default_value=investigator or _safe_get_username())
+            if who.upper() == "B":
+                continue  # re-ask case name
+            case_name, investigator = new_case, who
+            step = 1 if not back_to_summary else 4
+
+        elif step == 1:
+            console.print("\n[bold steel_blue]Detecting mounted volumes and devices...[/bold steel_blue]")
+            drives, android_devices = detector.detect_all_devices()
+            if not drives and not android_devices:
+                console.print("[bold red][!] No mounted drives or devices detected.[/bold red]")
+                get_safe_input("Press Enter to go back", allow_empty=True)
+                step = 0
+                continue
+            all_targets: list[tuple[str, Any]] = []
+            for drv in drives:
+                all_targets.append(("drive", drv))
+                idx = len(all_targets)
+                rem = " [USB Removable]" if drv.is_removable else ""
+                console.print(f"  [[bold gold1]{idx}[/bold gold1]] Drive [bold cyan]{drv.drive_letter}[/cyan] ({drv.label or 'Unlabeled'}) - {drv.filesystem} - {format_size(drv.total_size)}{rem}")
+            for dev in android_devices:
+                all_targets.append(("android", dev))
+                console.print(f"  [[bold gold1]{len(all_targets)}[/bold gold1]] Android [bold green]{dev.device_name}[/green] ({dev.serial_number})")
+            console.print("  [[bold gold1]A[/bold gold1]] All of the above")
+
+            while True:
+                sel = get_safe_input("Select targets (comma-separated, e.g. 1,3 - or A)", default_value="A")
+                if sel.upper() == "B":
+                    break
+                raw = [x.strip() for x in sel.split(",")] if sel.upper() != "A" else []
+                if sel.upper() != "A" and not raw:
+                    console.print("[red][!] Enter at least one target number.[/red]")
+                    continue
+                picked_drives: list[str] = []
+                picked_android: list[Device] = []
+                bad = False
+                for tok in (["A"] if sel.upper() == "A" else raw):
+                    if tok.upper() == "A":
+                        for ttype, tobj in all_targets:
+                            (picked_drives if ttype == "drive" else picked_android).append(tobj.drive_letter if ttype == "drive" else tobj)
+                        continue
+                    if not tok.isdigit() or not (1 <= int(tok) <= len(all_targets)):
+                        console.print(f"[red][!] '{tok}' is not a valid target number (1-{len(all_targets)}).[/red]")
+                        bad = True
+                        break
+                    ttype, tobj = all_targets[int(tok) - 1]
                     if ttype == "drive":
-                        selected_drive_letters.append(tobj.drive_letter)
+                        picked_drives.append(tobj.drive_letter)
                     else:
-                        selected_android.append(tobj)
-                else:
-                    console.print(f"[yellow][!] Index {num} out of range. Skipping.[/yellow]")
+                        picked_android.append(tobj)
+                if bad:
+                    continue
+                selected_drive_letters, selected_android = picked_drives, picked_android
+                break
+            else:
+                pass
+            if sel.upper() == "B":
+                step = 0 if not back_to_summary else 4
+                continue
+            if not selected_drive_letters and not selected_android:
+                continue  # re-prompt same step
+            step = 2 if not back_to_summary else 4
 
-    if not selected_drive_letters and not selected_android:
-        console.print("[bold red][!] No targets selected. Cannot proceed.[/bold red]")
-        get_safe_input("Press Enter to return", allow_empty=True)
-        return
+        elif step == 2:
+            console.print("\n[bold steel_blue]Detection Profile:[/bold steel_blue]")
+            prof_table = Table(box=box.ROUNDED, show_header=True, header_style="bold steel_blue")
+            prof_table.add_column("Option", justify="center", style="bold gold1")
+            prof_table.add_column("Profile", style="bold white")
+            prof_table.add_column("Modules")
+            prof_table.add_row("1", "Exfiltration Focus", "USB history, deletions, LNK/JumpLists, hash matching")
+            prof_table.add_row("2", "Employee Exit Scan", "USB history, deletions, LNK/JumpLists, ShellBags")
+            prof_table.add_row("3", "Incident Response", "Prefetch, event logs, ShellBags, deletions")
+            prof_table.add_row("4", "Full System Forensics", "All modules on all selected drives")
+            console.print(prof_table)
+            pc = prompt_menu_choice(["1", "2", "3", "4", "B"], prompt_label="Profile", breadcrumb="Wizard")
+            if pc == "B":
+                step = 1 if not back_to_summary else 4
+                continue
+            chosen_profile = {"1": "exfiltration", "2": "employee_exit", "3": "incident_response", "4": "full"}[pc]
+            step = 3 if not back_to_summary else 4
 
-    if selected_android and not selected_drive_letters:
-        console.print("[bold green][+] Android-Only target selected for investigation.[/bold green]")
-    elif selected_android and selected_drive_letters:
-        console.print(f"[bold green][+] {len(selected_drive_letters)} drive(s) and {len(selected_android)} Android device(s) selected.[/bold green]")
-    else:
-        console.print(f"[bold green][+] {len(selected_drive_letters)} drive(s) selected.[/bold green]")
+        elif step == 3:
+            while True:
+                d1 = get_safe_input("Start Date YYYY-MM-DD (Enter = no limit)", default_value=date_from_str, allow_empty=True)
+                if d1.upper() == "B":
+                    break
+                d2 = get_safe_input("End Date YYYY-MM-DD (Enter = no limit)", default_value=date_to_str, allow_empty=True)
+                if d2.upper() == "B":
+                    break
+                ok = True
+                for label, val in (("Start", d1), ("End", d2)):
+                    if val:
+                        try:
+                            datetime.strptime(val, "%Y-%m-%d")
+                        except ValueError:
+                            console.print(f"[red][!] {label} date '{val}' is not YYYY-MM-DD — try again.[/red]")
+                            ok = False
+                if not ok:
+                    continue
+                date_from_str, date_to_str = d1, d2
+                break
+            else:
+                pass
+            if d1.upper() == "B" or d2.upper() == "B":
+                step = 2 if not back_to_summary else 4
+                continue
+            step = 4
 
-    # Step 3: Select Investigation Profile
-    console.print("\n[bold steel_blue]Select Investigation Profile:[/bold steel_blue]")
-    profiles_table = Table(box=box.ROUNDED, show_header=True, header_style="bold steel_blue")
-    profiles_table.add_column("Option", style="bold gold1", justify="center")
-    profiles_table.add_column("Profile Name", style="bold white")
-    profiles_table.add_column("Focus Area & Target Modules")
-
-    profiles_table.add_row("1", "Exfiltration Focus", "USB history, deletions, LNK/JumpLists, hash matching, suspicious files, deleted-file recovery")
-    profiles_table.add_row("2", "Employee Exit Scan", "USB history, deletions, LNK/JumpLists, ShellBags, suspicious files, hash matching")
-    profiles_table.add_row("3", "Incident Response", "Prefetch execution, event logs, ShellBags, suspicious files, deletions")
-    profiles_table.add_row("4", "Full System Forensics", "Executes all analyzer modules across all selected drives")
-
-    console.print(profiles_table)
-
-    prof_choice = prompt_menu_choice(["1", "2", "3", "4", "B"], breadcrumb="Wizard > Profile Selection")
-    if prof_choice == "B":
-        return
-
-    profile_map = {
-        "1": "exfiltration",
-        "2": "employee_exit",
-        "3": "incident_response",
-        "4": "full",
-    }
-    chosen_profile = profile_map.get(prof_choice, "full")
-
-    # Step 4: Optional Date Range Boundaries
-    console.print("\n[bold steel_blue]Optional Date Boundaries (Filter events by date range):[/bold steel_blue]")
-    date_from_str = get_safe_input(
-        "Start Date (YYYY-MM-DD, or press Enter for no limit)",
-        allow_empty=True,
-    )
-    if date_from_str.upper() == "B":
-        return
-
-    date_to_str = get_safe_input(
-        "End Date (YYYY-MM-DD, or press Enter for no limit)",
-        allow_empty=True,
-    )
-    if date_to_str.upper() == "B":
-        return
-
-    date_from: datetime | None = None
-    date_to: datetime | None = None
-
-    if date_from_str:
-        try:
-            date_from = datetime.strptime(date_from_str, "%Y-%m-%d")
-        except ValueError:
-            console.print("[yellow][!] Invalid start date format. Date filter omitted.[/yellow]")
-
-    if date_to_str:
-        try:
-            date_to = datetime.strptime(date_to_str, "%Y-%m-%d")
-        except ValueError:
-            console.print("[yellow][!] Invalid end date format. Date filter omitted.[/yellow]")
-
-    # Step 5: Confirmation & Summary
-    scan_options = ScanOptions(
-        drives=selected_drive_letters,
-        profile_name=chosen_profile,
-        date_from=date_from,
-        date_to=date_to,
-    )
-
-    clear_screen()
-    render_menu_banner()
-    console.rule("[bold steel_blue]Investigation Summary & Pre-Flight Check[/bold steel_blue]")
-
-    summary_table = Table(box=box.SIMPLE, show_header=False)
-    summary_table.add_column(style="bold cyan", justify="right")
-    summary_table.add_column(style="white")
-
-    summary_table.add_row("Case Name:", case_name)
-    summary_table.add_row("Investigator:", investigator)
-    summary_table.add_row("Target Drives:", ", ".join(selected_drive_letters))
-    if selected_android:
-        summary_table.add_row("Android Devices:", ", ".join(d.device_name for d in selected_android))
-    summary_table.add_row("Profile:", chosen_profile.upper())
-    summary_table.add_row("Date Range:", f"{date_from_str or 'Earliest'} to {date_to_str or 'Latest'}")
-
-    console.print(Panel(summary_table, title="[bold gold1]Scan Parameters[/bold gold1]", border_style="gold1"))
-    print_scan_summary(scan_options)
-
-    confirm_start = get_safe_input("\nStart investigation pipeline now? (Y/n)", default_value="Y")
-    if confirm_start.lower() == "y":
-        console.print(f"\n[bold green][+] Case '{case_name}' initialized.[/bold green]")
-        console.print("[bold yellow][*] Running live forensic analysis pipeline...[/bold yellow]")
-
-        from helios.pipeline import run_investigation_pipeline
-
-        with Progress(
-            SpinnerColumn(style="gold1"),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(bar_width=40),
-            TimeElapsedColumn(),
-            console=console,
-        ) as progress:
-            pipeline_task = progress.add_task(
-                "[cyan]Detecting drives & devices...", total=100
-            )
-
-            def _on_progress(label: str, percent: float) -> None:
-                progress.update(
-                    pipeline_task,
-                    description=f"[cyan]{label}...",
-                    completed=percent,
-                )
-
-            result = run_investigation_pipeline(
-                case_name=case_name,
-                investigator=investigator,
-                selected_drive_letters=selected_drive_letters,
-                selected_android=selected_android,
+        else:  # summary
+            scan_options = ScanOptions(
+                drives=selected_drive_letters,
                 profile_name=chosen_profile,
-                date_from=date_from,
-                date_to=date_to,
-                config=config,
-                on_progress=_on_progress,
+                date_from=datetime.strptime(date_from_str, "%Y-%m-%d") if date_from_str else None,
+                date_to=datetime.strptime(date_to_str, "%Y-%m-%d") if date_to_str else None,
             )
-            report_file = result["report_path"]
+            clear_screen()
+            render_menu_banner()
+            console.rule("[bold steel_blue]Summary — press Enter to run, or pick a number to change it[/bold steel_blue]")
+            st = Table(box=box.SIMPLE, show_header=False)
+            st.add_column(style="bold cyan", justify="right")
+            st.add_column(style="white")
+            st.add_row("[1] Case:", f"{case_name}  ({investigator})")
+            st.add_row("[2] Targets:", ", ".join(selected_drive_letters) + (", " + ", ".join(d.device_name for d in selected_android) if selected_android else ""))
+            st.add_row("[3] Profile:", chosen_profile.upper())
+            st.add_row("[4] Dates:", f"{date_from_str or 'Earliest'} to {date_to_str or 'Latest'}")
+            console.print(Panel(st, title="[bold gold1]Scan Parameters[/gold1]", border_style="gold1"))
+            print_scan_summary(scan_options)
 
-        console.print("\n[bold green][+] Forensic scan complete![/bold green]")
-        console.print(f"[bold green][+] HTML Report generated at:[/bold green] [bold cyan]{report_file}[/bold cyan]")
-        console.print(f"[cyan]Report profile: {chosen_profile.upper()} -- each scan type produces its own focused report.[/cyan]")
+            ans = get_safe_input("Press Enter to start, 1-4 to change a setting, C to cancel", default_value="", allow_empty=True)
+            if ans.upper() == "C":
+                return
+            if ans in ("1", "2", "3", "4"):
+                back_to_summary = True
+                step = int(ans) - 1
+                continue
+            back_to_summary = False
+            date_from = datetime.strptime(date_from_str, "%Y-%m-%d") if date_from_str else None
+            date_to = datetime.strptime(date_to_str, "%Y-%m-%d") if date_to_str else None
 
-        if result.get("walk_capped"):
-            console.print(
-                f"[yellow][!] Note: file inventory was capped at {MAX_FILES_PER_DRIVE:,} files per drive "
-                "-- files beyond that limit were not indexed. Re-scan specific folders "
-                "for full coverage.[/yellow]"
-            )
-        console.print(
-            "[dim]Note: files deleted with Shift+Delete (or emptied from the Recycle Bin) never create a "
-            "$I Recycle Bin entry, so they are invisible to Recycle Bin parsing -- they can only be recovered "
-            "by raw-disk scanning (SleuthKit, requires administrator rights) or the NTFS USN journal.[/dim]"
-        )
+            console.print(f"\n[bold green][+] Case '{case_name}' initialized.[/bold green]")
+            from helios.pipeline import run_investigation_pipeline
 
-    get_safe_input("\nPress Enter to return to Main Menu", allow_empty=True)
+            with Progress(SpinnerColumn(style="gold1"), TextColumn("[progress.description]{task.description}"), BarColumn(bar_width=40), TimeElapsedColumn(), console=console) as progress:
+                task = progress.add_task("[cyan]Detecting drives & devices...", total=100)
+                def _on_progress(label: str, percent: float) -> None:
+                    progress.update(task, description=f"[cyan]{label}...", completed=percent)
+                result = run_investigation_pipeline(
+                    case_name=case_name,
+                    investigator=investigator,
+                    selected_drive_letters=selected_drive_letters,
+                    selected_android=selected_android,
+                    profile_name=chosen_profile,
+                    date_from=date_from,
+                    date_to=date_to,
+                    config=config,
+                    on_progress=_on_progress,
+                )
+                report_file = result["report_path"]
+
+            console.print("\n[bold green][+] Scan complete![/bold green]")
+            console.print(f"[bold green][+] Report:[/bold green] [bold cyan]{report_file}[/bold cyan]")
+            get_safe_input("\nPress Enter to return to Main Menu", allow_empty=True)
+            return
 
 
 # ── Sub-Menu 2: Drives & Devices Live Inspector ─────────────────────────────
@@ -935,7 +896,7 @@ def menu_export_report(config: HeliosConfig) -> None:
     console.rule("[bold green]Main Menu > [6] Export Report & Evidence Package[/bold green]")
 
     console.print("Select Output Export Format:")
-    console.print("  [1] Premium Corporate HTML Dashboard (Single-file with ApexCharts)")
+    console.print("  [1] HTML Report (single file, charts embedded)")
     console.print("  [2] JSON Structured Investigation Package")
     console.print("  [3] Evidence CSV Spreadsheet Bundle")
     console.print("  [4] Tamper-Evident Evidence ZIP Package (with SHA-256 integrity hash)")

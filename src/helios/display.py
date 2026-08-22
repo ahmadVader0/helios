@@ -270,6 +270,83 @@ def print_banner() -> None:
     console.print(build_banner_panel())
 
 
+# ── Banner intro animation ──────────────────────────────────────────────────
+
+_BANNER_ANIM_PLAYED = False
+
+_SHADE_DIM = {"█": "▓", "▓": "▒", "▒": "░", "░": "░"}
+
+
+def _banner_source_lines(width: int) -> list[str]:
+    """Return the EXACT padded art lines the static banner renders at `width`."""
+    lines: list[str] = []
+    if width >= 110:
+        lines.extend(BANNER_ART_FULL)
+    elif width >= 80:
+        lines.extend(s.center(74) for s in SUN_COMPACT)
+        lines.append("")
+        lines.extend(HELIOS_ART_MED)
+    else:
+        pad = min(34, max(1, width - 6))
+        lines.extend(c.center(pad) for c in HELIOS_ART_COMPACT)
+    return lines
+
+
+def _banner_wave_frame(lines: list[str], center: int | None, band: int = 6) -> Text:
+    """One animation frame.
+
+    ``center`` marks the wave position — chars near it render bright white,
+    everything else stays gold but one shade dimmer. ``center=None``
+    renders the fully-lit artwork (identical glyphs to the static banner).
+    """
+    text = Text(no_wrap=True)
+    for line in lines:
+        for col, ch in enumerate(line):
+            if ch == " ":
+                text.append(" ")
+            elif center is None or abs(col - center) <= band:
+                text.append(ch, style="bold white" if center is not None else _GOLD_STYLE)
+            else:
+                text.append(_SHADE_DIM.get(ch, ch), style=_GOLD_STYLE)
+        text.append("\n")
+    return text
+
+
+def animate_banner_once() -> None:
+    """Play a short shimmer sweep across the sun/logo, then settle on the
+    exact static artwork (the caller prints it right after). Runs once per
+    process; skipped on non-TTY output or HELIOS_NO_ANIM=1.
+    """
+    global _BANNER_ANIM_PLAYED
+    _BANNER_ANIM_PLAYED = True
+
+    import os as _os
+    import time as _time
+
+    if _os.environ.get("HELIOS_NO_ANIM") == "1" or not sys.stdout.isatty():
+        return
+
+    from rich.live import Live
+
+    try:
+        width = console.width
+        lines = _banner_source_lines(width)
+        span = max((len(line) for line in lines), default=40) + 8
+
+        with Live(console=console, refresh_per_second=30, transient=True) as live:
+            # Brightness sweep left→right, then two fully-lit frames before
+            # the transient region is erased and the static banner prints.
+            for cx in range(-8, span + 8, 4):
+                live.update(_banner_wave_frame(lines, cx))
+                _time.sleep(0.04)
+            for _ in range(2):
+                live.update(_banner_wave_frame(lines, None))
+                _time.sleep(0.08)
+    except Exception:
+        # Animation is cosmetic — never break the TUI over it.
+        pass
+
+
 # ── Drives ──────────────────────────────────────────────────────────────────
 
 def print_drives_table(drives: list[DriveInfo]) -> None:
