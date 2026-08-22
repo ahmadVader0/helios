@@ -349,7 +349,13 @@
         function heliosEsc(text) {
             const div = document.createElement('div');
             div.textContent = text === null || text === undefined ? '' : String(text);
-            return div.innerHTML;
+            // textContent→innerHTML escapes & < > but NOT quotes — and every
+            // sink below interpolates into double-quoted attributes, so
+            // quotes MUST be encoded too or evidence strings can inject
+            // attributes (stored XSS from parsed artifact paths).
+            return div.innerHTML
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
         }
 
         function heliosDownloadCSV(rows, filename) {

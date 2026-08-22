@@ -16,7 +16,7 @@ python src\helios\cli.py menu
 if %ERRORLEVEL% NEQ 0 (
     echo.
     echo [!] Installing required Python dependencies...
-    pip install click rich jinja2 xxhash pyyaml
+    pip install click rich jinja2 pyyaml python-registry python-evtx
     python src\helios\cli.py menu
 )
 

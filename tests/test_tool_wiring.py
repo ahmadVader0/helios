@@ -5,39 +5,29 @@ External binaries are never executed; adapter behaviors are faked with
 SimpleNamespace stand-ins, per the project testing convention.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
+from conftest import drive_pipeline_with_stub_modules, make_artifact, make_file_record, use_bundle_root
 
 from helios.analyzers.event_logs import EventLogsAnalyzer
 from helios.analyzers.file_type_verifier import FileTypeVerifierAnalyzer
 from helios.analyzers.prefetch import PrefetchAnalyzer
 from helios.analyzers.recycle_bin import RecycleBinAnalyzer
 from helios.analyzers.shellbags import ShellBagsAnalyzer
-from helios.analyzers.base import RawArtifact
-from helios.models import Alert, EventType, FileRecord, ScanOptions, Severity
+from helios.analyzers.base import ModuleSkipped, RawArtifact
+from helios.models import (
+    Alert,
+    DataEvent,
+    EventType,
+    FileRecord,
+    ScanOptions,
+    Severity,
+)
 from helios.pipeline import _resolve_fls_source
-
-
-def make_artifact(source_path: Path, artifact_type: str = "evtx", device_id: str = "dev-1") -> RawArtifact:
-    return RawArtifact(
-        artifact_id="art-1",
-        artifact_type=artifact_type,
-        source_path=source_path,
-        device_id=device_id,
-        collected_at=datetime.now(),
-    )
-
-
-def make_file_record(path: Path, extension: str) -> FileRecord:
-    return FileRecord(
-        file_path=str(path),
-        file_name=path.name,
-        extension=extension,
-        size=path.stat().st_size,
-        source_device="dev-1",
-    )
 
 
 def test_event_logs_chainsaw_sigma_alerts(tmp_path, monkeypatch):
@@ -57,12 +47,8 @@ def test_event_logs_chainsaw_sigma_alerts(tmp_path, monkeypatch):
         run_sigma_hunt=lambda evtx_dir, rules_dir, out_json: [fake_finding],
     )
 
-    def fake_get_bundle_root() -> Path:
-        rules = tmp_path / "sigma_rules"
-        rules.mkdir(exist_ok=True)
-        return tmp_path
-
-    monkeypatch.setattr("helios.config.get_bundle_root", fake_get_bundle_root)
+    (tmp_path / "sigma_rules").mkdir(exist_ok=True)
+    use_bundle_root(monkeypatch, tmp_path)
 
     analyzer = EventLogsAnalyzer()
     analyzer.chainsaw_adapter = fake_chainsaw
@@ -340,6 +326,10 @@ def test_sleuthkit_env_ld_library_path(tmp_path, monkeypatch):
     assert sk._env() is None
 
 
+@pytest.mark.skipif(
+    not (Path(__file__).resolve().parent.parent / "tools").is_dir(),
+    reason="bundled tools not present",
+)
 def test_bundled_tools_layout():
     """Guard the curated tool bundle layout shipped with Helios."""
     tools_dir = Path(__file__).resolve().parent.parent / "tools"
@@ -504,46 +494,95 @@ def test_standard_fls_command_includes_p_flag():
     assert "-r" in captured[0]
 
 
-def test_deleted_file_records_preserved_under_date_filtering():
-    from datetime import datetime, timedelta
-    from helios.models import FileRecord
+def test_deleted_file_records_preserved_under_date_filtering(tmp_path, monkeypatch):
+    """Drive the REAL pipeline date-range filter (pipeline.py post-correlation
+    block) instead of a local re-implementation of its predicate.
 
-    d_from = datetime.now() - timedelta(days=2)
-    old_ts = datetime.now() - timedelta(days=365)
+    Contract: events outside [date_from, date_to] are dropped (bounds
+    inclusive), while deleted-file records are ALWAYS preserved regardless
+    of age — stale active files are filtered out.
+    """
+    d_from = datetime.now(tz=timezone.utc) - timedelta(days=2)
+    d_to = datetime.now(tz=timezone.utc)
+    old_ts = datetime.now(tz=timezone.utc) - timedelta(days=365)
+    mid_ts = datetime.now(tz=timezone.utc) - timedelta(hours=6)
 
-    rec1 = FileRecord(
-        file_path="/c/old_deleted.txt",
-        file_name="old_deleted.txt",
-        created=old_ts,
-        modified=old_ts,
-        is_deleted=True,
-    )
-    rec2 = FileRecord(
-        file_path="/c/old_active.txt",
-        file_name="old_active.txt",
-        created=old_ts,
-        modified=old_ts,
-        is_deleted=False,
-    )
+    def ev(ts: datetime, path: str) -> DataEvent:
+        return DataEvent(
+            timestamp=ts,
+            event_type=EventType.FILE_CREATE,
+            source_device="HOST-1",
+            source_path=path,
+        )
 
-    # Test filtering condition directly
-    def _ts_in_range(ts: datetime | None) -> bool:
-        if ts is None:
-            return True
-        if ts.tzinfo is not None:
-            ts = ts.replace(tzinfo=None)
-        if d_from and ts < d_from:
-            return False
-        return True
-
-    records = [rec1, rec2]
-    filtered = [
-        f for f in records
-        if getattr(f, "is_deleted", False)
-        or _ts_in_range(getattr(f, "modified", None))
-        or _ts_in_range(getattr(f, "created", None))
+    events = [
+        ev(old_ts, "/c/out_of_range_old.txt"),
+        ev(d_from, "/c/boundary_from.txt"),
+        ev(mid_ts, "/c/in_range.txt"),
+        ev(d_to, "/c/boundary_to.txt"),
+        ev(d_to + timedelta(days=1), "/c/out_of_range_future.txt"),
+    ]
+    records = [
+        FileRecord(
+            file_path="/c/old_deleted.txt",
+            file_name="old_deleted.txt",
+            created=old_ts,
+            modified=old_ts,
+            accessed=old_ts,
+            is_deleted=True,
+        ),
+        # Fully stale active file: every present timestamp outside the
+        # range (a None timestamp passes the filter by design).
+        FileRecord(
+            file_path="/c/old_active.txt",
+            file_name="old_active.txt",
+            created=old_ts,
+            modified=old_ts,
+            accessed=old_ts,
+            is_deleted=False,
+        ),
     ]
 
-    assert rec1 in filtered  # Old deleted file MUST be preserved
-    assert rec2 not in filtered  # Old active file is filtered out
+    result = drive_pipeline_with_stub_modules(
+        tmp_path, monkeypatch,
+        events=events, file_records=records,
+        date_from=d_from, date_to=d_to,
+    )
+
+    inv = result["investigation"]
+    event_paths = {e.source_path for e in inv.events}
+    assert "/c/in_range.txt" in event_paths
+    assert "/c/out_of_range_old.txt" not in event_paths
+    assert "/c/out_of_range_future.txt" not in event_paths
+    # Range bounds are inclusive
+    assert "/c/boundary_from.txt" in event_paths
+    assert "/c/boundary_to.txt" in event_paths
+
+    kept_files = {f.file_path for f in inv.file_records}
+    assert "/c/old_deleted.txt" in kept_files  # Old deleted file MUST be preserved
+    assert "/c/old_active.txt" not in kept_files  # Old active file is filtered out
+
+
+def test_pipeline_records_skipped_status_when_module_raises_module_skipped(tmp_path, monkeypatch):
+    """A module raising ModuleSkipped must be booked as status 'skipped'
+    (NOT 'failed'/'ran') with its message kept as detail."""
+    def raise_skip(*args, **kwargs):
+        raise ModuleSkipped("No Prefetch files collected (synthetic skip)")
+
+    result = drive_pipeline_with_stub_modules(
+        tmp_path, monkeypatch,
+        module_behaviors={"program_execution": raise_skip},
+    )
+
+    inv = result["investigation"]
+    by_key = {m["key"]: m for m in inv.module_results}
+    skipped = by_key["program_execution"]
+    assert skipped["status"] == "skipped"
+    assert "No Prefetch files collected" in skipped["detail"]
+    assert skipped["events"] == 0 and skipped["alerts"] == 0
+
+    # Contrast: sibling stub modules that complete normally are booked as ran.
+    ran_keys = {m["key"] for m in inv.module_results if m["status"] == "ran"}
+    assert "usb_transfers" in ran_keys
+    assert all(m["status"] != "failed" for m in inv.module_results)
 

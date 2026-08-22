@@ -52,6 +52,9 @@ def _profile_sections(module_results: list[Any], profile_name: str | None) -> di
         "deletions": deletions,
         "data_movement": transfers or deletions,
         "deletion_chart": deletions,
+        # Exfiltration template gates its USB timeline card on this key —
+        # it was previously never emitted, making that section dead.
+        "usb_transfers": "usb_transfers" in ran_keys,
     }
 
 
@@ -818,12 +821,18 @@ class ReportGenerator:
         rows: list[dict[str, Any]] = []
 
         def _highlight(context_text: str, keywords: list[str]) -> str:
-            """Wrap every keyword occurrence in <mark> for hit highlighting."""
-            safe_ctx = str(context_text or "")
+            """Escape snippet HTML first, then wrap keyword hits in <mark>.
+
+            Snippets come from raw scanned file bytes — hostile content must
+            never reach the browser, so escaping happens BEFORE tagging.
+            """
+            from markupsafe import escape as _escape
+
+            safe_ctx = str(_escape(str(context_text or "")))
             for kw in [k for k in keywords if k]:
                 try:
                     safe_ctx = re.sub(
-                        rf"({re.escape(str(kw))})",
+                        rf"({re.escape(_escape(str(kw)))})",
                         r"<mark>\1</mark>",
                         safe_ctx,
                         flags=re.IGNORECASE,
@@ -894,7 +903,9 @@ class ReportGenerator:
             data = {"case_name": getattr(self.investigation, "case_name", "Forensic Investigation")}
 
         with output_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4)
+            # Correlations carry datetime hops and other non-JSON types;
+            # default=str keeps the export working instead of crashing.
+            json.dump(data, f, indent=4, default=str)
         return output_path
 
     def generate_csv_bundle(self, output_dir: Path) -> list[Path]:

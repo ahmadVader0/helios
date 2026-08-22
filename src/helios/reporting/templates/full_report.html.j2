@@ -60,7 +60,7 @@
         <p class="section-desc">Click a type to open it pre-filtered in the Event Explorer.</p>
         <div class="type-chips">
             {% for t, n in event_type_counts | dictsort(by='value') | reverse %}
-            <button class="chip" onclick="switchTabTo('tab-timeline'); heliosFilterEvents({type: '{{ t }}'});">{{ t }}<span class="n">{{ n }}</span></button>
+            <button class="chip" data-evtype="{{ t }}">{{ t }}<span class="n">{{ n }}</span></button>
             {% endfor %}
         </div>
     </div>
@@ -270,6 +270,16 @@ function switchTabTo(panelId) {
     document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === panelId));
     setTimeout(() => window.dispatchEvent(new Event('resize')), 50);
 }
+
+/* Evidence-type chips -> jump to explorer pre-filtered (no inline JS from data) */
+document.addEventListener('DOMContentLoaded', function () {
+    document.querySelectorAll('.chip[data-evtype]').forEach(chip => {
+        chip.addEventListener('click', function () {
+            switchTabTo('tab-timeline');
+            window.heliosFilterEvents({ type: chip.dataset.evtype });
+        });
+    });
+});
 {% endblock %}
 
 {% block charts_js %}

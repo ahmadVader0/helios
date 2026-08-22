@@ -176,11 +176,10 @@ class CrossDeviceCorrelator:
                     hash_map[file_hash] = []
                 hash_map[file_hash].append((dev, record))
                     
+        # Empty-content hashes must never imply "same file".
         EMPTY_HASHES = {
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
             "d41d8cd98f00b204e9800998ecf8427e",
-            "",
-            "N/A",
         }
 
         # Analyze hashes that appear on multiple devices or different drives
@@ -428,7 +427,6 @@ class CrossDeviceCorrelator:
         serial_mounts: dict[str, list[tuple[datetime, str]]] = {}
         # --- 1b. USB sessions ------------------------------------------------
         sessions: list[tuple[datetime, datetime]] = []
-        usb_names: dict[str, str] = {}
 
         for evt in self.investigation.events:
             etype = getattr(evt, "event_type", None)
@@ -443,11 +441,6 @@ class CrossDeviceCorrelator:
                     continue
                 hw = str(meta.get("hardware_id", "") or meta.get("serial_number", ""))
                 sessions.append((norm_ts, norm_ts + timedelta(hours=4)))
-                if hw:
-                    friendly = meta.get("friendly_name") or hw
-                    usb_names[_normalize_volume_serial(hw)] = friendly
-            elif etype_val == "USB_DISCONNECT":
-                pass  # connect windows already capped; disconnects tighten nothing here
             elif etype_val == "DEVICE_CONNECT":
                 vs = _normalize_volume_serial(meta.get("volume_serial", ""))
                 if vs and len(vs) >= 8:

@@ -56,15 +56,15 @@ class ChainsawAdapter(ForensicToolAdapter):
             candidates = [
                 bundle_root / "tools" / "mappings" / "sigma-event-logs-all.yml",
                 bundle_root / "mappings" / "sigma-event-logs-all.yml",
-                bundle_root / "tools" / "mappings",
-                bundle_root / "mappings",
                 Path.cwd() / "tools" / "mappings" / "sigma-event-logs-all.yml",
                 Path.cwd() / "mappings" / "sigma-event-logs-all.yml",
                 Path(__file__).resolve().parent.parent.parent.parent / "tools" / "mappings" / "sigma-event-logs-all.yml",
                 Path(__file__).resolve().parent.parent.parent.parent / "mappings" / "sigma-event-logs-all.yml",
             ]
+            # ONLY files qualify — returning a directory here makes chainsaw
+            # exit non-zero and every Sigma alert for the EVTX is silently lost.
             for cand in candidates:
-                if cand.exists():
+                if cand.is_file():
                     return cand
         except Exception as e:
             logger.debug("Error resolving chainsaw mapping file: %s", e)

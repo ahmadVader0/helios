@@ -875,7 +875,9 @@ def menu_keyword_search(config: HeliosConfig) -> None:
     table.add_column("Match Type", style="cyan")
 
     for m in matches:
-        table.add_row(m.file_name, m.file_path, m.match_context, m.match_type)
+        from helios.display import esc_markup
+
+        table.add_row(esc_markup(m.file_name), esc_markup(m.file_path), esc_markup(m.match_context), esc_markup(m.match_type))
 
     console.print(table)
     console.print(f"\n[bold green][+] Search complete. Total matches found: {len(matches)}[/bold green]")

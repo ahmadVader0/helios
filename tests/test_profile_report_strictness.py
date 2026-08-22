@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from helios.config import load_config
+
 from helios.models import (
     Alert,
     Confidence,
@@ -230,9 +230,9 @@ def _build_test_investigation(profile_name: str) -> Investigation:
     )
 
 
-def test_exfiltration_report_strictness(tmp_path: Path):
+def test_exfiltration_report_strictness(tmp_path: Path, helios_config):
     inv = _build_test_investigation("exfiltration")
-    config = load_config()
+    config = helios_config
     gen = ReportGenerator(inv, config)
     out_file = tmp_path / "exfil_report.html"
     gen.generate_html_report(out_file)
@@ -251,9 +251,9 @@ def test_exfiltration_report_strictness(tmp_path: Path):
     assert "Windows Event Logs &amp; Sigma" not in content
 
 
-def test_employee_exit_report_strictness(tmp_path: Path):
+def test_employee_exit_report_strictness(tmp_path: Path, helios_config):
     inv = _build_test_investigation("employee_exit")
-    config = load_config()
+    config = helios_config
     gen = ReportGenerator(inv, config)
     out_file = tmp_path / "exit_report.html"
     gen.generate_html_report(out_file)
@@ -272,9 +272,9 @@ def test_employee_exit_report_strictness(tmp_path: Path):
     assert "Windows Event Logs &amp; Sigma" not in content
 
 
-def test_incident_response_report_strictness(tmp_path: Path):
+def test_incident_response_report_strictness(tmp_path: Path, helios_config):
     inv = _build_test_investigation("incident_response")
-    config = load_config()
+    config = helios_config
     gen = ReportGenerator(inv, config)
     out_file = tmp_path / "ir_report.html"
     gen.generate_html_report(out_file)
@@ -293,9 +293,9 @@ def test_incident_response_report_strictness(tmp_path: Path):
     assert "Recently Accessed Files (LNK / JumpLists)" not in content
 
 
-def test_full_report_contains_all_available_modules(tmp_path: Path):
+def test_full_report_contains_all_available_modules(tmp_path: Path, helios_config):
     inv = _build_test_investigation("full")
-    config = load_config()
+    config = helios_config
     gen = ReportGenerator(inv, config)
     out_file = tmp_path / "full_report.html"
     gen.generate_html_report(out_file)

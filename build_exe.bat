@@ -8,7 +8,7 @@ echo   Helios Standalone Windows Executable Build Script
 echo ============================================================
 echo.
 echo Installing missing build dependencies...
-pip install click rich jinja2 xxhash pyyaml pyinstaller
+pip install click rich jinja2 pyyaml python-registry python-evtx pyinstaller
 echo.
 python build_win.py
 

@@ -131,21 +131,24 @@ class EZToolsAdapter(ForensicToolAdapter):
         """
         logger.debug(f"Executing command: {' '.join(cmd)}")
         start_time = time.time()
+        timed_out = False
         try:
             # Ensure the output directory exists
             output_csv_dir.mkdir(parents=True, exist_ok=True)
 
             result = self.run_subprocess(cmd, timeout=120)
+            timed_out = result.returncode < 0
 
-            if result.returncode != 0:
+            if result.returncode != 0 and not timed_out:
+                # Zimmerman tools routinely exit non-zero on PARTIAL success
+                # (SBECmd skips corrupt hives, PECmd skips corrupt .pf files,
+                # several builds return warning codes). A complete-or-partial
+                # fresh CSV is still evidence — parse it, but say so loudly.
                 logger.warning(
-                    "Command exited with non-zero code %d. Stderr: %s",
+                    "Command exited %d; attempting to parse any freshly written "
+                    "CSV anyway (partial success). Stderr: %s",
                     result.returncode, result.stderr[:500],
                 )
-                # Never parse CSVs after a failed run: files left behind by a
-                # previous run in the same directory would be ingested as if
-                # they were produced by this command.
-                return []
 
         except subprocess.TimeoutExpired:
             logger.error(f"Command timed out after 120s: {cmd}")
@@ -154,25 +157,24 @@ class EZToolsAdapter(ForensicToolAdapter):
             logger.error(f"Error executing command {' '.join(cmd)}: {e}")
             return []
 
-        # Find the CSV file in the output directory
-        # EZ Tools standard output naming format is: <Timestamp>_<Prefix>_Output.csv
-        # or <Prefix>_Output_<Timestamp>.csv. Match both patterns flexibly.
         try:
-            candidates = list(output_csv_dir.glob(f"*{expected_csv_prefix}*.csv"))
+            candidates = list(output_csv_dir.glob("*.csv"))
             if not candidates:
-                # Fallback to any CSV generated in the directory
-                candidates = list(output_csv_dir.glob("*.csv"))
-
-            if not candidates:
-                logger.debug(f"No CSV files found in {output_csv_dir} matching {expected_csv_prefix}")
+                logger.debug(f"No CSV files found in {output_csv_dir}")
                 return []
 
-            # Filter for CSV files created or modified during this run (with 5s clock skew tolerance)
+            # Only CSVs written during THIS run count (5s clock-skew tolerance).
+            # This is THE stale-ingestion guard — evidence is never sourced
+            # from leftover files of earlier runs, whatever the exit code.
             fresh_csvs = [p for p in candidates if p.stat().st_mtime >= start_time - 5.0]
-            target_csvs = fresh_csvs if fresh_csvs else candidates
+            if not fresh_csvs:
+                logger.warning(
+                    "No freshly written CSV output in %s — refusing to ingest "
+                    "pre-existing files as evidence.", output_csv_dir,
+                )
+                return []
 
-            # Sort by modification time to get the latest one
-            latest_csv = max(target_csvs, key=lambda p: p.stat().st_mtime)
+            latest_csv = max(fresh_csvs, key=lambda p: p.stat().st_mtime)
             return self._parse_csv(latest_csv)
 
         except Exception as e:

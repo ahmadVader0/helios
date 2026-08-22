@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import struct
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -9,7 +10,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from helios.adapters.base import resolve_tool_binary
+from conftest import use_bundle_root
+
+from helios.adapters.base import ToolRunResult, resolve_tool_binary
 from helios.adapters.ez_tools_adapter import EZToolsAdapter
 from helios.adapters.exiftool_adapter import ExifToolAdapter
 from helios.adapters.sleuthkit_adapter import SleuthKitAdapter
@@ -42,8 +45,7 @@ def test_resolve_tool_binary_bundle_root(tmp_path: Path, monkeypatch: pytest.Mon
     fake_exe.write_text("#!/bin/sh\nexit 0")
     fake_exe.chmod(0o755)
 
-    import helios.config
-    monkeypatch.setattr(helios.config, "get_bundle_root", lambda: tmp_path)
+    use_bundle_root(monkeypatch, tmp_path)
 
     found = resolve_tool_binary("fls")
     assert found is not None
@@ -84,10 +86,30 @@ def test_exiftool_path_normalization(tmp_path: Path, monkeypatch: pytest.MonkeyP
     assert ext == "pdf"
 
 
-def test_sleuthkit_fls_timeout_parameter() -> None:
-    """SleuthKitAdapter run_fls must accept configurable timeout defaulting to 1800s."""
+def test_sleuthkit_fls_timeout_parameter(monkeypatch: pytest.MonkeyPatch) -> None:
+    """run_fls must accept a configurable timeout defaulting to 1800s (30m)
+    and pass it through to the subprocess layer unchanged."""
     adapter = SleuthKitAdapter()
-    assert hasattr(adapter, "run_fls")
+
+    sig = inspect.signature(adapter.run_fls)
+    assert "timeout" in sig.parameters
+    assert sig.parameters["timeout"].default == 1800
+
+    captured: dict[str, Any] = {}
+
+    def fake_run_subprocess(command: list[str], timeout: int = 300, env=None) -> ToolRunResult:
+        captured["command"] = list(command)
+        captured["timeout"] = timeout
+        return ToolRunResult(returncode=0, stdout="", stderr="", execution_time=0.01, command=command)
+
+    monkeypatch.setattr(adapter, "run_subprocess", fake_run_subprocess)
+
+    adapter.run_fls("/dev/sdz")  # default timeout path
+    assert captured["timeout"] == 1800
+
+    adapter.run_fls("/dev/sdz", timeout=42)  # explicit override
+    assert captured["timeout"] == 42
+    assert "/dev/sdz" in captured["command"]
 
 
 def test_shellbags_real_column_names_and_timestamp_parsing() -> None:
@@ -295,8 +317,7 @@ def test_config_merges_tool_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     config_yaml = tmp_path / "config.yaml"
     config_yaml.write_text("tool_paths:\n  sleuthkit: /custom/bin/fls\n", encoding="utf-8")
 
-    import helios.config
-    monkeypatch.setattr(helios.config, "get_bundle_root", lambda: tmp_path)
+    use_bundle_root(monkeypatch, tmp_path)
 
     cfg = load_config(tmp_path)
     assert cfg.tool_paths.get("sleuthkit") == "/custom/bin/fls"
@@ -336,7 +357,7 @@ def test_chainsaw_adapter_passes_mapping_arg(tmp_path: Path, monkeypatch: pytest
 def test_subprocess_utf8_decoding_non_ascii_and_binary() -> None:
     """run_subprocess must decode non-ASCII and invalid UTF-8 bytes safely without UnicodeDecodeError."""
     import sys
-    from helios.adapters.base import ForensicToolAdapter, ToolRunResult
+    from helios.adapters.base import ForensicToolAdapter
 
     class DummyAdapter(ForensicToolAdapter):
         def tool_name(self) -> str:

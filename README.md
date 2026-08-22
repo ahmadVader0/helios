@@ -29,7 +29,7 @@ pip install -r requirements.txt  # or: pip install -e .
 
 helios --help                    # click CLI entrypoint
 helios menu                      # interactive wizard
-helios demo                      # run the demo investigation -> reports/
+helios demo                      # run the demo investigation -> ./demo_output
 helios investigate -c "Case-001" --drives C: --interactive
 helios keyword-search -k "password" -p C:\case\evidence -o ./reports
 ```
@@ -47,7 +47,7 @@ Helios ships four scan profiles. Each profile gates which analysis modules actua
 | 3 | `incident_response` | Prefetch execution, event logs, ShellBags, suspicious files, deletions (no USB/cross-device) | `incident_response_report.html.j2` |
 | 4 | `full` | Every module enabled | `full_report.html.j2` |
 
-Profiles are defined in `config/investigation_profiles.yaml`. The report's "Module Execution" card shows exactly which modules ran, were skipped, or failed — nothing is fabricated.
+Profiles are defined in `config/investigation_profiles.yaml`. The report's "Module Execution" card shows exactly which modules ran, were skipped, failed, or were disabled by the profile — nothing is fabricated.
 
 ---
 
@@ -66,7 +66,7 @@ Profiles are defined in `config/investigation_profiles.yaml`. The report's "Modu
 - **Cross-device correlation** — hash-based movement chains, exfiltration pattern detection
 - **Snapshot manager** — hash state at two points in time, diff for added/modified/deleted
 - **Keyword search** — exfiltration keyword triage (name/path + text content, size/line/hit caps), presets (credentials, financial, confidential, PII) + custom; produces its own HTML report + JSON hit export
-- **Evidence packaging** — JSON + CSV exports, tamper-evident ZIP with SHA-256 integrity
+- **Evidence packaging** — JSON + CSV exports and an evidence ZIP package
 - **Settings screen** — shows the exact status of every tool Helios uses (ACTIVE / NOT FOUND)
 
 ---
@@ -76,7 +76,8 @@ Profiles are defined in `config/investigation_profiles.yaml`. The report's "Modu
 Reports are written to `./reports` by default:
 
 - `helios_report_{CASE}_{PROFILE}.html` — profile-specific self-contained HTML report
-- Exports: `investigation.json`, `events.csv`, `alerts.csv`, `files.csv`, `correlations.csv`
+- Pipeline exports (in `reports/<case>/exports/`): `investigation.json`, `events_full.json`, `events.csv`, `alerts.csv`, `file_records.csv`
+- Demo runs (`helios demo`) instead write to `./demo_output`: report + `exports/` bundle with `investigation.json`, `events.csv`, `alerts.csv`, `files.csv`, `correlations.csv`
 - `chain_of_custody.json` — every tool action, timestamped
 
 Each report includes: metric cards (clickable, jump to sections), charts, key findings with artifact paths, deleted-files with an honest **Shift+Delete limitation note**, a real event log table, alerts with artifact-path column, scanned devices, module execution log, and chain of custody.
@@ -100,7 +101,7 @@ src/helios/
   reporting/                   report_generator, chart_builder, table_builder, templates/
   demo.py                      demo investigation + pipeline
   pipeline.py                   run_investigation_pipeline(): single gated execution path
-tests/                         72 pytest tests
+tests/                         130 pytest tests
 tools/                         bundled forensic binaries (EZ tools, adb, chainsaw, exiftool, fls/fsstat + DLLs)
 ```
 
@@ -109,7 +110,7 @@ tools/                         bundled forensic binaries (EZ tools, adb, chainsa
 ## Development
 
 ```bash
-venv/bin/python -m pytest -q                       # 119 tests
+venv/bin/python -m pytest -q                       # 130 tests
 venv/bin/mypy src/helios                           # strict type checks
 venv/bin/ruff check --select F src/helios tests    # lint (F rules)
 ```

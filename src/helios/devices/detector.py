@@ -81,11 +81,13 @@ def detect_drives() -> list[DriveInfo]:
             data = json.loads(result.stdout)
 
             def _process_block(block: dict, parent_serial: str = "") -> None:
-                # Newer lsblk versions emit "mountpoints" (list) instead of the
-                # singular "mountpoint" field; handle both.
+                # Newer util-linux emits "mountpoints" (list) instead of the
+                # singular "mountpoint" field; arrays can contain interleaved
+                # nulls (btrfs subvolumes, bind mounts) so pick the FIRST
+                # non-null entry — [0] alone made live drives invisible.
                 mount = block.get("mountpoint")
                 if not mount and isinstance(block.get("mountpoints"), list):
-                    mount = block["mountpoints"][0] if block["mountpoints"] else None
+                    mount = next((m for m in block["mountpoints"] if m), None)
                 blk_type = block.get("type", "")
 
                 if (mount and blk_type in ("part", "disk", "lvm", "crypt")

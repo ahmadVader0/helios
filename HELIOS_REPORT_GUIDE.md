@@ -69,7 +69,7 @@ package "Report & Evidence Delivery" {
     [ApexCharts Integration] as Charts
     [HTML Forensic Report (.html)] as HTMLReport
     [CSV / JSON Bundles] as DataExports
-    [Tamper-Evident Evidence ZIP (SHA-256)] as EvidenceZip
+    [Evidence ZIP Package] as EvidenceZip
 }
 
 ' Relations
@@ -210,13 +210,13 @@ Helios features a terminal UI built with Rich. Below are the exact menus, option
 ================================================================================
 ┌────────────────────── Primary Operations Menu ───────────────────────────────┐
 │                                                                              │
-│    [1]  🔍  New Investigation        [5]  🔎  Keyword Search                 │
-│    [2]  💾  Drives & Devices         [6]  📊  Export Report                  │
-│    [3]  ⚡  Quick USB Scan           [7]  ⚙   Settings & Tools               │
-│    [4]  📸  Snapshot Manager         [0]  🚪  Exit Helios                    │
+│    [1]  New Investigation            [5]  Keyword Search                     │
+│    [2]  Drives & Devices             [6]  Export Report                      │
+│    [3]  Quick USB Scan               [7]  Settings & Tools                   │
+│    [4]  Snapshot Manager             [0]  Exit Helios                        │
 │                                                                              │
 └──────────────────────────────────────────────────────────────────────────────┘
-Helios Main Engine [1/2/3/4/5/6/7/0] ➤
+Helios Main Engine [1/2/3/4/5/6/7/0] >
 ```
 
 ---
@@ -290,10 +290,10 @@ Helios Main Engine [1/2/3/4/5/6/7/0] ➤
 
 ### Sub-Menu 6: Export Report & Evidence Package (`[6]`)
 * Export formats:
-  * `[1]` **Corporate HTML Dashboard:** Self-contained single-file HTML report with ApexCharts.
-  * `[2]` **JSON Structured Package:** `investigation.json` containing raw structures.
-  * `[3]` **CSV Spreadsheet Bundle:** `events.csv`, `alerts.csv`, `files.csv`, `correlations.csv`.
-  * `[4]` **Tamper-Evident Evidence ZIP Package:** Bundles HTML, JSON, CSVs and appends SHA-256 checksum manifest.
+  * `[1]` **Corporate HTML Dashboard:** Self-contained single-file HTML report (`helios_executive_report.html`) with ApexCharts.
+  * `[2]` **JSON Structured Package:** `helios_investigation.json` containing raw structures.
+  * `[3]` **Evidence CSV Spreadsheet Bundle:** `events.csv`, `alerts.csv`, `file_records.csv`.
+  * `[4]` **Evidence ZIP Package:** Bundles the HTML report, case JSON and CSVs into `helios_evidence_package.zip`.
 
 ---
 
@@ -309,9 +309,11 @@ Helios Main Engine [1/2/3/4/5/6/7/0] ➤
 | EZ Tools - PECmd | `PrefetchAnalyzer` | `PECmd.exe` | ACTIVE |
 | EZ Tools - SBECmd | `ShellBagsAnalyzer` | `SBECmd.exe` | ACTIVE |
 | Chainsaw & Sigma | `EventLogsAnalyzer` | `chainsaw.exe` | ACTIVE |
+| EZ Tools - MFTECmd | `MFTAnalyzer` / `USNJournalAnalyzer` | `MFTECmd.exe` | ACTIVE |
 | ExifTool | `FileTypeVerifier` | `exiftool.exe` | ACTIVE |
 | Android Debug Bridge | `ADBAdapter` | `adb.exe` | ACTIVE |
 | Python Registry | `UsbHistoryAnalyzer` | `python-registry` | ACTIVE |
+| Python EVTX | `EventLogsAnalyzer` | `python-evtx` | ACTIVE |
 
 ---
 
@@ -352,6 +354,10 @@ Helios utilizes 4 distinct investigation profiles. Each profile controls which a
 | `shellbags` | Disabled | **ENABLED** | **ENABLED** | **ENABLED** |
 | `program_execution` | Disabled | Disabled | **ENABLED** | **ENABLED** |
 | `event_logs` | Disabled | Disabled | **ENABLED** | **ENABLED** |
+| `mft_analysis` (MFTECmd) | Disabled | **ENABLED** | **ENABLED** | **ENABLED** |
+| `usn_journal` (MFTECmd) | Disabled | **ENABLED** | **ENABLED** | **ENABLED** |
+
+Each module in the report's "Investigation Profile & Module Execution" card carries one of four honest statuses: **ran**, **skipped** (artifact type absent from the scanned volume — not an error), **failed** (error, detail shown), or **disabled** (not part of the selected profile). Nothing is fabricated.
 
 ---
 
@@ -460,13 +466,16 @@ Every investigation execution generates a timestamped chain of custody record wr
 
 When exporting an investigation via Sub-menu `[6]`, the following files are produced:
 
-1. **`helios_report_<CASE>_<PROFILE>.html`** — Self-contained HTML report.
-2. **`investigation.json`** — Complete serialized Python data model.
+1. **`helios_executive_report.html`** (`[1]`) / **`helios_report.html`** (`[4]`) — Self-contained HTML report.
+2. **`helios_investigation.json`** (`[2]`) / **`helios_case.json`** (`[4]`) — Complete serialized investigation data model.
 3. **`events.csv`** — All timeline events (Create, Modify, Delete, Move, USB, Execution).
 4. **`alerts.csv`** — All security rule alerts with artifact file paths.
-5. **`files.csv`** — Complete file inventory with SHA-256 hashes and MACB timestamps.
-6. **`correlations.csv`** — Cross-device hash matching hops and exfiltration chains.
-7. **`helios_evidence_package.zip`** — Compressed bundle with SHA-256 digest manifest for legal chain of custody verification.
+5. **`file_records.csv`** — Complete file inventory with SHA-256 hashes.
+6. **`helios_evidence_package.zip`** (`[4]`) — Compressed evidence bundle of the above artifacts.
+
+Live investigations run through the pipeline write their own bundle next to each report in
+`reports/<case>/exports/`: `investigation.json`, `events_full.json`, `events.csv`,
+`alerts.csv` and `file_records.csv`.
 
 ---
 

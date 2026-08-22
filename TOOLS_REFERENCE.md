@@ -1,9 +1,26 @@
 # TOOLS_REFERENCE.md
 
 > References only the external utilities currently bundled and wired into the
-> Helios pipeline. Deleted/unused tools (MFTECmd, icat, mmls, EvtxECmd,
-> ALEAPP, PhotoRec, Bulk Extractor, Plaso) were removed from the bundle — see
-> `AUDIT_REPORT.md`.
+> Helios pipeline. `MFTECmd.exe` is bundled in `tools/` and drives the MFT
+> Analyzer and USN Journal Analyzer modules (see `MFTECmdAdapter`,
+> `mft_analyzer.py`, `usn_journal.py`). Windows Event Logs (.evtx) are parsed
+> directly with the bundled-in `python-evtx` library, with Chainsaw/Sigma
+> hunting layered on top.
+
+## MFTECmd
+- **License:** MIT (Eric Zimmerman Tools)
+- **URL:** https://ericzimmerman.github.io/
+- **What it does:** Parses NTFS `$MFT` and `$UsnJrnl:$J` into CSV.
+- **How we use it:** `MFTECmdAdapter` invokes the bundled binary;
+  `MFTAnalyzer` and `USNJournalAnalyzer` parse its CSV output into
+  DataEvents (created/modified timestamps, copy indicators, USN reasons).
+- **Data produced:** Full MFT record timeline ($SI/$FN), USN journal change
+  journal rows (rename, overwrite, delete, data-extension reasons).
+- **Installation:** Bundled Windows binary (`tools/MFTECmd.exe`).
+- **Sample command:** `MFTECmd.exe -f "E:\$MFT" --csv .\output`
+- **Limitations:** NTFS volumes only; requires read access to `$MFT` /
+  `$UsnJrnl` on the evidence volume.
+
 
 ## The Sleuth Kit (fls, fsstat)
 - **License:** CPL/GPL
@@ -74,6 +91,22 @@
 - **Installation:** Bundled `chainsaw.exe` + `sigma_rules/`.
 - **Sample command:** `chainsaw hunt -r rules/ evtx_folder/ --json`
 - **Limitations:** Relies on robust Sigma rule sets for accurate detections.
+
+## python-evtx (library)
+- **License:** LGPL-3.0
+- **URL:** https://github.com/williballenthin/python-evtx
+- **What it does:** Pure Python parser for Windows Event Log (.evtx) files.
+- **How we use it:** `EventLogsAnalyzer` reads collected Security/System/
+  Software/Partition-Diagnostic EVTX files directly via `Evtx.Evtx`
+  (`_parse_evtx`), extracting record timestamps, EventIDs and payload data;
+  on live systems, `wevtutil epl` exports are parsed the same way.
+  Chainsaw/Sigma hunts run on top of these records for detections.
+- **Data produced:** Per-record XML (SystemTime, EventID, event data)
+  reparsed into Helios DataEvents.
+- **Installation:** `pip install python-evtx`
+- **Sample command:** Used as a Python library, not a CLI tool.
+- **Limitations:** No recovery of heavily corrupted chunks; large EVTX
+  files parse slower than native tooling.
 
 ## python-registry (library)
 - **License:** Apache 2.0

@@ -471,6 +471,7 @@ class UsbHistoryAnalyzer(AnalyzerBase):
                                 source_device=artifact.device_id,
                                 source_path=artifact.source_path.name,
                                 confidence=Confidence.HIGH,
+                                raw_source="SetupAPI",
                                 metadata=metadata,
                             ))
                         current_device = None
@@ -482,6 +483,7 @@ class UsbHistoryAnalyzer(AnalyzerBase):
                                 source_device=artifact.device_id,
                                 source_path=artifact.source_path.name,
                                 confidence=Confidence.MEDIUM,
+                                raw_source="SetupAPI",
                                 metadata={
                                     "hardware_id": current_delete["hw_id"],
                                     "source_log": "setupapi.dev.log",

@@ -559,6 +559,19 @@ def print_status(message: str, style: str = "info") -> None:
     console.print(f"{icons.get(style, icons['info'])} {message}")
 
 
+def esc_markup(text: object) -> str:
+    """Escape Rich markup so evidence/user strings render literally.
+
+    Keyword hits, artifact paths and case names can contain bracket
+    sequences (``[/]``, ``[red]``) that Rich parses as markup — crashing
+    the TUI with MarkupError or silently restyling output. Anything that
+    originates outside Helios goes through this before console rendering.
+    """
+    from rich.markup import escape as _escape
+
+    return _escape(str(text if text is not None else ""))
+
+
 def print_progress_header(title: str) -> None:
     """Print a section divider with a title."""
     console.print()

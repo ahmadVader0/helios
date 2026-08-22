@@ -28,9 +28,28 @@ from helios.models import (
 
 
 @click.group(invoke_without_command=True)
+@click.option("--verbose", "-v", is_flag=True, default=False, help="INFO-level logging to stderr (tool commands, module outcomes).")
+@click.option("--debug", "-d", is_flag=True, default=False, help="DEBUG-level logging incl. full subprocess argv.")
 @click.pass_context
-def main(ctx: click.Context) -> None:
+def main(ctx: click.Context, verbose: bool, debug: bool) -> None:
     """Helios — Data Movement Forensics across live devices."""
+    import logging
+
+    if debug:
+        level = logging.DEBUG
+    elif verbose:
+        level = logging.INFO
+    else:
+        level = logging.WARNING
+
+    if verbose or debug:
+        logging.basicConfig(
+            level=level,
+            format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+            datefmt="%H:%M:%S",
+        )
+        logging.getLogger("helios").setLevel(level)
+
     if ctx.invoked_subcommand is None:
         from helios.menu import run_main_menu
         run_main_menu()
@@ -193,6 +212,9 @@ def investigate_cmd(
         extra_paths=extra_paths,
         config=None,
         on_progress=_on_progress,
+        excluded_paths=[e.strip() for e in (exclude or "").split(",") if e.strip()] or None,
+        max_depth=depth,
+        skip_media=skip_media,
     )
 
     investigation = result["investigation"]
@@ -303,7 +325,8 @@ def keyword_search_cmd(keywords: str, path: str, output: str | None, title: str 
 
     print_progress_header("Keyword Search Matches")
     for m in matches:
-        print_status(f"{m.match_type.upper():>10} | {m.file_path} | {m.match_context[:120]}", "info")
+        from helios.display import esc_markup
+        print_status(f"{esc_markup(m.match_type.upper()):>10} | {esc_markup(m.file_path)} | {esc_markup(m.match_context[:120])}", "info")
     print_status(f"Total matches: {len(matches)} of {len(file_records)} files scanned", "success")
     print_status(f"HTML report: {report_path}", "success")
     print_status(f"JSON export: {json_path}", "success")

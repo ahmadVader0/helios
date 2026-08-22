@@ -135,7 +135,7 @@ def test_profile_sections_from_module_log():
         {**ran, "key": "file_deletions"},
         {**ran, "key": "usb_transfers"},
     ], "full")
-    assert full == {"transfers": True, "deletions": True, "data_movement": True, "deletion_chart": True}
+    assert full == {"transfers": True, "deletions": True, "data_movement": True, "deletion_chart": True, "usb_transfers": True}
 
     # Incident response: no cross-device matching -> no transfers section
     ir = _profile_sections([

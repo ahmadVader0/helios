@@ -57,3 +57,4 @@ AUDIT_REPORT.md
 Errors.md
 *.txt
 !requirements.txt
+!tools/README.txt

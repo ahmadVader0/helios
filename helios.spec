@@ -17,7 +17,9 @@ project_root = Path(os.path.abspath(".")).resolve()
 
 datas = [
     ('config/*.yaml', 'config'),
-    ('src/helios/reporting/templates/*', 'helios/reporting/templates'),
+    # Recursive glob so vendor/ (e.g. apexcharts.min.js) is bundled too:
+    # PyInstaller walks glob-matched subdirectories preserving their layout.
+    ('src/helios/reporting/templates/**', 'helios/reporting/templates'),
     ('src/helios/demo_data/**', 'helios/demo_data'),
 ]
 
@@ -57,7 +59,6 @@ hiddenimports = [
     'rich.color',
     'rich.live',
     'yaml',
-    'xxhash',
     'jinja2',
     'ctypes',
     'json',

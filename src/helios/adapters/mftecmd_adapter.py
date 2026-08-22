@@ -31,7 +31,7 @@ class MFTECmdAdapter(ForensicToolAdapter):
         # MFTECmd writes CSV, so parsing stdout isn't used to return DataEvents
         return []
 
-    def parse_mft(self, mft_file: Path, output_dir: Path, out_name: str = "mft_dump") -> Path:
+    def parse_mft(self, mft_file: Path, output_dir: Path, out_name: str = "mft_dump", timeout: int = 1800) -> Path:
         """
         Parse an $MFT file using MFTECmd.exe.
         
@@ -54,9 +54,15 @@ class MFTECmdAdapter(ForensicToolAdapter):
             "--csvf", f"{out_name}.csv"
         ]
         
-        result: ToolRunResult = self.run_subprocess(cmd)
+        # $MFT on multi-hundred-GB volumes takes far longer than the
+        # 300s default — a silent timeout here made MFT analysis vanish
+        # from reports as if the tool were broken.
+        result: ToolRunResult = self.run_subprocess(cmd, timeout=timeout)
+        if result.returncode < 0:
+            logger.error(f"MFTECmd parse_mft timed out or crashed after {timeout}s")
+            raise RuntimeError(f"MFTECmd parse_mft did not complete within {timeout}s")
         if result.returncode != 0:
-            logger.error(f"MFTECmd parse_mft failed: {result.stderr}")
+            logger.error(f"MFTECmd parse_mft failed: {result.stderr[:500]}")
             raise RuntimeError(f"MFTECmd parse_mft failed with return code {result.returncode}")
             
         expected_out: Path = output_dir / f"{out_name}.csv"
@@ -70,7 +76,8 @@ class MFTECmdAdapter(ForensicToolAdapter):
         volume_or_journal: Path, 
         output_dir: Path, 
         out_name: str = "usn_dump", 
-        mft_file: Path | None = None
+        mft_file: Path | None = None,
+        timeout: int = 1800,
     ) -> Path:
         """
         Parse a $UsnJrnl:$J file using MFTECmd.exe.
@@ -98,9 +105,12 @@ class MFTECmdAdapter(ForensicToolAdapter):
         if mft_file is not None:
             cmd.extend(["-m", str(mft_file)])
             
-        result: ToolRunResult = self.run_subprocess(cmd)
+        result: ToolRunResult = self.run_subprocess(cmd, timeout=timeout)
+        if result.returncode < 0:
+            logger.error(f"MFTECmd USN parse timed out or crashed after {timeout}s")
+            raise RuntimeError(f"MFTECmd parse_usn_journal did not complete within {timeout}s")
         if result.returncode != 0:
-            logger.error(f"MFTECmd parse_usn_journal failed: {result.stderr}")
+            logger.error(f"MFTECmd parse_usn_journal failed: {result.stderr[:500]}")
             raise RuntimeError(f"MFTECmd parse_usn_journal failed with return code {result.returncode}")
             
         expected_out: Path = output_dir / f"{out_name}.csv"

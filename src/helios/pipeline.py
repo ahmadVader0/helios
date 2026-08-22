@@ -44,6 +44,53 @@ from helios.models import (
 
 logger = logging.getLogger(__name__)
 
+# Tools whose resolution is logged once at scan start so field users can
+# see at a glance WHY a module produced nothing (binary missing = skipped).
+_TOOL_INVENTORY = (
+    ("MFTECmd", "MFT + USN Journal analysis"),
+    ("LECmd", "LNK parsing"),
+    ("JLECmd", "JumpList parsing"),
+    ("SBECmd", "ShellBags"),
+    ("PECmd", "Prefetch enrichment"),
+    ("RBCmd", "Recycle Bin enrichment"),
+    ("fls", "SleuthKit deleted-file recovery"),
+    ("chainsaw", "Sigma event-log hunt"),
+    ("exiftool", "file-type verification"),
+)
+
+
+def log_tool_inventory() -> None:
+    """Log which forensic binaries resolved, once per scan (INFO level).
+
+    Run with ``helios --verbose`` to see it; this converts the most common
+    'empty report' complaints into one-glance diagnoses.
+    """
+    import platform
+
+    from helios.adapters.base import resolve_tool_binary
+
+    logger.info(
+        "Helios scan start — host=%s python=%s cwd=%s",
+        platform.platform(), platform.python_version(), Path.cwd(),
+    )
+    for tool, purpose in _TOOL_INVENTORY:
+        resolved = resolve_tool_binary(tool)
+        if resolved:
+            logger.info("tool %-10s OK   %s (%s)", tool, resolved, purpose)
+        else:
+            logger.warning("tool %-10s MISSING — %s will be limited/skipped", tool, purpose)
+
+
+def sanitize_filename(name: str) -> str:
+    """Make an arbitrary case name safe for use inside output file paths.
+
+    Only spaces are replaced otherwise — ``Case: Q3/Final`` would crash the
+    report write AFTER a potentially hours-long scan (``:`` and ``/`` are
+    illegal or path-traversing on both platforms).
+    """
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(name or "")).strip().rstrip(".")
+    return cleaned[:120] or "case"
+
 # Disk-image extensions that SleuthKit can enumerate directly.
 FLS_IMAGE_EXTENSIONS = {".dd", ".raw", ".img", ".e01", ".ex01", ".001", ".vhd", ".vhdx"}
 
@@ -523,18 +570,14 @@ def _run_walk(
     file_records: list[FileRecord],
     events: list[DataEvent],
     on_progress: ProgressCallback | None,
+    scan_options: ScanOptions | None = None,
 ) -> bool:
     """Live filesystem walk with real SHA-256 hashing and timeline events.
 
-    Fixes applied vs. original implementation:
-    - All timestamps are UTC-aware (``datetime.fromtimestamp(…, tz=timezone.utc)``).
-    - On Linux, ``st_ctime`` is the inode-change time (NOT creation time);
-      we use ``st_birthtime`` (Python 3.12+) when available, else
-      ``min(st_ctime, st_mtime)`` as the best approximation.
-    - Three events are emitted per file (FILE_CREATE, FILE_MODIFY,
-      FILE_ACCESS) instead of only FILE_MODIFY, giving the timeline
-      full coverage matching what Autopsy produces.
-    - The per-drive cap is now 500,000 (was 2,000).
+    Honors user scan options when provided:
+    - ``excluded_paths``: path prefixes skipped entirely
+    - ``max_depth``: directory depth limit relative to the drive root
+    - ``skip_media``: large media extensions listed but not hashed
 
     Returns True when any drive hit the per-drive file cap.
     """
@@ -542,8 +585,18 @@ def _run_walk(
 
     from helios.core.hasher import hash_file
 
+    excluded = [str(p).rstrip("\\/").lower() for p in (scan_options.excluded_paths if scan_options else []) if p]
+    max_depth = getattr(scan_options, "max_depth", None) if scan_options else None
+    skip_media = bool(getattr(scan_options, "skip_media", False)) if scan_options else False
+    media_exts = {".mkv", ".mp4", ".avi", ".mov", ".wmv", ".iso", ".vmdk", ".mp3", ".flac"}
+
+    def _is_excluded(path_text: str) -> bool:
+        lowered = str(path_text).lower()
+        return any(lowered == p or lowered.startswith(p + os.sep) or lowered.startswith(p + "\\") for p in excluded)
+
     any_capped = False
-    for drv in target_drives:
+    total_drives = max(1, len(target_drives))
+    for drv_idx, drv in enumerate(target_drives):
         try:
             root_path = Path(f"{drv.drive_letter}\\") if os.name == "nt" else Path(drv.drive_letter)
             if not root_path.exists():
@@ -551,15 +604,30 @@ def _run_walk(
             scanned_count = 0
             walk_capped = False
             src_dev = drive_devices.get(drv.drive_letter)
+            if on_progress:
+                on_progress(f"Walking {drv.drive_letter}", 2.0 + (drv_idx / total_drives) * 16.0)
+            root_depth = len(root_path.parts)
             for p in root_path.rglob("*"):
                 if scanned_count >= MAX_FILES_PER_DRIVE:
                     walk_capped = True
                     break
+                # Heartbeat every 500 files so long walks don't look frozen.
+                if scanned_count and scanned_count % 500 == 0 and on_progress:
+                    pct = 2.0 + ((drv_idx + min(scanned_count / MAX_FILES_PER_DRIVE, 1.0)) / total_drives) * 16.0
+                    on_progress(f"Walking {drv.drive_letter} ({scanned_count:,} files)", pct)
                 if not p.is_file():
+                    continue
+                if excluded and _is_excluded(str(p)):
+                    continue
+                if max_depth is not None and (len(p.parts) - root_depth) > max_depth:
                     continue
                 try:
                     st = p.stat()
-                    file_hash = hash_file(p, algorithm="sha256") if st.st_size <= MAX_HASH_FILE_SIZE else ""
+                    too_big = st.st_size > MAX_HASH_FILE_SIZE
+                    if skip_media and p.suffix.lower() in media_exts:
+                        file_hash = ""
+                    else:
+                        file_hash = hash_file(p, algorithm="sha256") if not too_big else ""
 
                     # All timestamps MUST be UTC-aware — never naive local
                     m_time = datetime.fromtimestamp(st.st_mtime, tz=timezone.utc)
@@ -667,6 +735,9 @@ def run_investigation_pipeline(
     report_dir: Path | None = None,
     config: HeliosConfig | None = None,
     on_progress: ProgressCallback | None = None,
+    excluded_paths: list[str] | None = None,
+    max_depth: int | None = None,
+    skip_media: bool = False,
 ) -> dict[str, Any]:
     """
     Run the complete gated forensic pipeline.
@@ -687,6 +758,7 @@ def run_investigation_pipeline(
         Dict with 'investigation' and 'report_path'.
     """
     config = config or load_config()
+    log_tool_inventory()
 
     if on_progress:
         on_progress("Detecting drives & devices", 2.0)
@@ -709,6 +781,9 @@ def run_investigation_pipeline(
         date_from=date_from,
         date_to=date_to,
         profile_name=profile_name,
+        excluded_paths=excluded_paths or [],
+        max_depth=max_depth,
+        skip_media=skip_media,
     )
 
     # Profile-driven module gating
@@ -801,7 +876,7 @@ def run_investigation_pipeline(
     artifact_scope = _scope_devices(target_drives, drive_devices, local_device)
 
     # 1. Live filesystem walk
-    walk_capped = _run_walk(target_drives, drive_devices, file_records, events, on_progress)
+    walk_capped = _run_walk(target_drives, drive_devices, file_records, events, on_progress, scan_options)
 
     # 2-8. Gated analyzer modules
     _run_module("usb_transfers", "USB History Analyzer", events, alerts,
@@ -926,7 +1001,7 @@ def run_investigation_pipeline(
     # 11. Profile-specific HTML report
     from helios.reporting.report_generator import ReportGenerator
 
-    report_file = reports_dir / f"helios_report_{case_name.replace(' ', '_')}_{profile_name}.html"
+    report_file = reports_dir / f"helios_report_{sanitize_filename(case_name).replace(' ', '_')}_{profile_name}.html"
 
     generator = ReportGenerator(investigation, config)
     generator.generate_html_report(report_file)
