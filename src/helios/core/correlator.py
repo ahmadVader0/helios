@@ -439,7 +439,6 @@ class CrossDeviceCorrelator:
                 norm_ts = _safe_ts(ts)
                 if norm_ts.year >= 9000:
                     continue
-                hw = str(meta.get("hardware_id", "") or meta.get("serial_number", ""))
                 sessions.append((norm_ts, norm_ts + timedelta(hours=4)))
             elif etype_val == "DEVICE_CONNECT":
                 vs = _normalize_volume_serial(meta.get("volume_serial", ""))
