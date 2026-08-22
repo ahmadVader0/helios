@@ -274,7 +274,38 @@ def print_banner() -> None:
 
 _BANNER_ANIM_PLAYED = False
 
-_SHADE_DIM = {"█": "▓", "▓": "▒", "▒": "░", "░": "░"}
+# Gold-family brightness ramp used by the intro shimmer. Glyphs NEVER change
+# between frames (that looked like glitching) — only column styles do.
+_RAMP = (
+    (2, "bold gold1"),
+    (5, "gold1"),
+    (10, "goldenrod"),
+)
+
+
+def _ramp_style(dist: int) -> str:
+    for limit, style in _RAMP:
+        if dist <= limit:
+            return style
+    return "dark_goldenrod"
+
+
+def _banner_wave_frame(lines: list[str], center: int | None) -> Text:
+    """One animation frame: identical glyphs to the static banner, colored
+    along a gold brightness gradient centered on ``center``. ``center=None``
+    renders everything at full brightness (the exact final look)."""
+    text = Text(no_wrap=True)
+    for line in lines:
+        if center is None:
+            text.append(line, style=_GOLD_STYLE)
+        else:
+            for col, ch in enumerate(line):
+                if ch == " ":
+                    text.append(" ")
+                else:
+                    text.append(ch, style=_ramp_style(abs(col - center)))
+        text.append("\n")
+    return text
 
 
 def _banner_source_lines(width: int) -> list[str]:
@@ -290,26 +321,6 @@ def _banner_source_lines(width: int) -> list[str]:
         pad = min(34, max(1, width - 6))
         lines.extend(c.center(pad) for c in HELIOS_ART_COMPACT)
     return lines
-
-
-def _banner_wave_frame(lines: list[str], center: int | None, band: int = 6) -> Text:
-    """One animation frame.
-
-    ``center`` marks the wave position — chars near it render bright white,
-    everything else stays gold but one shade dimmer. ``center=None``
-    renders the fully-lit artwork (identical glyphs to the static banner).
-    """
-    text = Text(no_wrap=True)
-    for line in lines:
-        for col, ch in enumerate(line):
-            if ch == " ":
-                text.append(" ")
-            elif center is None or abs(col - center) <= band:
-                text.append(ch, style="bold white" if center is not None else _GOLD_STYLE)
-            else:
-                text.append(_SHADE_DIM.get(ch, ch), style=_GOLD_STYLE)
-        text.append("\n")
-    return text
 
 
 def animate_banner_once() -> None:
@@ -331,17 +342,19 @@ def animate_banner_once() -> None:
     try:
         width = console.width
         lines = _banner_source_lines(width)
-        span = max((len(line) for line in lines), default=40) + 8
+        span = max((len(line) for line in lines), default=40) + 16
+
+        # Sweep timed to a full second regardless of terminal width.
+        steps = list(range(-8, span + 8, 6))
+        delay = min(0.08, max(0.03, 1.0 / max(1, len(steps))))
 
         with Live(console=console, refresh_per_second=30, transient=True) as live:
-            # Brightness sweep left→right, then two fully-lit frames before
-            # the transient region is erased and the static banner prints.
-            for cx in range(-8, span + 8, 4):
+            for cx in steps:
                 live.update(_banner_wave_frame(lines, cx))
-                _time.sleep(0.04)
-            for _ in range(2):
+                _time.sleep(delay)
+            for _ in range(3):
                 live.update(_banner_wave_frame(lines, None))
-                _time.sleep(0.08)
+                _time.sleep(0.07)
     except Exception:
         # Animation is cosmetic — never break the TUI over it.
         pass
